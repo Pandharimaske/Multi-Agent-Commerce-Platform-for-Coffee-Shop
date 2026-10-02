@@ -14,16 +14,16 @@ dependencies = [
     "httpx>=0.28.1",
     "langchain>=1.2.9",
     "langchain-community>=0.4.1",
-    "langchain-groq>=1.1.2",
+
     "langchain-huggingface>=1.2.0",
     "langchain-openai>=1.1.7",
-    "langchain-pinecone>=0.2.0",
+
     "langgraph>=1.0.8",
     "langgraph-checkpoint-postgres>=3.0.5",
     "langgraph-checkpoint-sqlite>=3.0.3",
     "mem0ai>=1.0.11",
     "pandas<3.0.0",
-    "pinecone>=6.0.0,<8.0.0",
+
     "psycopg2-binary>=2.9.11",
     "psycopg[binary,pool]>=3.3.3",
     "pwdlib[argon2]>=0.3.0",

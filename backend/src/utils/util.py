@@ -18,7 +18,6 @@ import time
 
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
-from langchain_groq import ChatGroq
 from langchain_huggingface import HuggingFaceEndpointEmbeddings
 
 from src.config import Config
@@ -33,37 +32,29 @@ try:
 except ImportError:
     openai = None
 
-try:
-    import groq
-except ImportError:
-    groq = None
-
 def get_llm_error_message(e: Exception) -> Optional[str]:
     """Classifies an LLM exception and returns a user-friendly error message if applicable."""
     error_str = str(e).lower()
-    
-    # Check for Rate Limits
-    if "rate limit" in error_str or (openai and isinstance(e, openai.RateLimitError)) or (groq and isinstance(e, groq.RateLimitError)):
+
+    # Rate limits
+    if "rate limit" in error_str or (openai and isinstance(e, openai.RateLimitError)):
         return "🚨 LLM Rate Limit: Too many requests. Please wait a moment before trying again."
-    
-    # Check for Token/Context Limits
+
+    # Token / context limits
     if "context_length_exceeded" in error_str or "maximum context length" in error_str:
         return "🚨 LLM Token Limit: The conversation is too long for the current model. Please start a new chat."
-    
-    # Check for Authentication Issues
+
+    # Authentication
     if "authentication" in error_str or (openai and isinstance(e, openai.AuthenticationError)):
-        return "🚨 LLM Auth Error: Invalid API key configuration. Please check your environment variables."
-    
-    # Check for Connection/Timeout
+        return "🚨 LLM Auth Error: Invalid API key configuration. Please check NIM_API_KEY in your .env."
+
+    # Connection / timeout
     if "connection" in error_str or "timeout" in error_str or (openai and isinstance(e, openai.APIConnectionError)):
-        return "🚨 LLM Connection Error: Unable to reach the AI provider. Please check your internet or try again later."
-    
-    # Check for generic API errors that shouldn't be hidden
+        return "🚨 LLM Connection Error: Unable to reach NVIDIA NIM. Please check your internet or try again later."
+
+    # Generic OpenAI-protocol errors (NIM uses the same protocol)
     if openai and isinstance(e, openai.OpenAIError):
-        return f"🚨 LLM Provider Error (OpenAI): {str(e)}"
-    
-    if groq and isinstance(e, groq.GroqError):
-        return f"🚨 LLM Provider Error (Groq): {str(e)}"
+        return f"🚨 LLM Provider Error (NIM): {str(e)}"
 
     return None
 
@@ -122,9 +113,10 @@ class LLMPool:
         logger.info("LLMPool initialized")
 
     def get_model(self, temperature: float = None, model_name: str = None) -> ChatOpenAI:
-        """Get or create LLM instance (cached by temperature/model combo).
-        
-        Thread-safe and reuses instances for efficiency.
+        """Get or create an NVIDIA NIM LLM instance (cached by temperature/model combo).
+
+        NVIDIA NIM exposes an OpenAI-compatible REST API, so ChatOpenAI is used
+        with nim_base_url and nim_api_key from config.
         """
         temperature = temperature if temperature is not None else Config.LLM_TEMPERATURE
         model_name = model_name or Config.LLM_MODEL
@@ -137,47 +129,26 @@ class LLMPool:
         with self._lock:
             if key not in LLMPool._models:
                 try:
-                    # Determine which provider to use as primary
-                    has_groq = bool(Config.GROQ_API_KEY)
-                    has_openrouter = bool(Config.OPENROUTER_API_KEY)
+                    if not Config.NIM_API_KEY:
+                        logger.error("NIM_API_KEY is not set! Add it to your .env file.")
+                        raise ValueError("NIM_API_KEY is required to initialise the LLM.")
 
-                    if not has_groq and not has_openrouter:
-                        logger.error("No LLM API keys found! (GROQ_API_KEY or OPENROUTER_API_KEY)")
+                    logger.info(
+                        f"Initialising NVIDIA NIM LLM | model={model_name} | "
+                        f"base_url={Config.NIM_BASE_URL} | temperature={temperature}"
+                    )
 
-                    logger.info(f"Initializing Resilient LLM: primary={'Groq' if has_groq else 'OpenRouter'} | model={Config.GROQ_MODEL if has_groq else model_name}")
-
-                    # Option A: Groq as Primary (Preferred for speed/limits)
-                    if has_groq:
-                        groq_llm = ChatGroq(
-                            model=Config.GROQ_MODEL,
-                            groq_api_key=Config.GROQ_API_KEY,
-                            temperature=temperature,
-                            timeout=Config.LLM_TIMEOUT_SECONDS
-                        )
-                        # OpenRouter as Fallback for Groq
-                        if has_openrouter:
-                            or_fallback = ChatOpenAI(
-                                model=model_name,
-                                openai_api_key=Config.OPENROUTER_API_KEY,
-                                openai_api_base=Config.OPENROUTER_BASE_URL,
-                                temperature=temperature,
-                                timeout=Config.LLM_TIMEOUT_SECONDS,
-                                default_headers={"HTTP-Referer": Config.APP_URL, "X-Title": Config.APP_NAME}
-                            )
-                            LLMPool._models[key] = groq_llm.with_fallbacks([or_fallback])
-                        else:
-                            LLMPool._models[key] = groq_llm
-                    
-                    # Option B: OpenRouter as Primary (Fallback if no Groq key)
-                    elif has_openrouter:
-                        LLMPool._models[key] = ChatOpenAI(
-                            model=model_name,
-                            openai_api_key=Config.OPENROUTER_API_KEY,
-                            openai_api_base=Config.OPENROUTER_BASE_URL,
-                            temperature=temperature,
-                            timeout=Config.LLM_TIMEOUT_SECONDS,
-                            default_headers={"HTTP-Referer": Config.APP_URL, "X-Title": Config.APP_NAME}
-                        )
+                    LLMPool._models[key] = ChatOpenAI(
+                        model=model_name,
+                        openai_api_key=Config.NIM_API_KEY,
+                        openai_api_base=Config.NIM_BASE_URL,
+                        temperature=temperature,
+                        timeout=Config.LLM_TIMEOUT_SECONDS,
+                        default_headers={
+                            "HTTP-Referer": Config.APP_URL,
+                            "X-Title": Config.APP_NAME,
+                        },
+                    )
 
                     self.health_checker.mark_check(True)
                 except Exception as e:
@@ -346,11 +317,10 @@ def initialize_all() -> None:
         Config.validate()
         logger.info("Configuration validated")
 
-        # Warm up connections
+        # Warm up LLM and embedding connections
         get_model()
         get_embedding_model()
-        get_pinecone_client()
-        
+
         logger.info("All connections initialized successfully")
     except Exception as e:
         logger.error(f"Failed to initialize connections: {str(e)}")
@@ -362,8 +332,6 @@ def shutdown_all() -> None:
     logger.info("Shutting down connections...")
     LLMPool.clear_cache()
     EmbeddingPool.clear_cache()
-    PineconePool.clear_cache()
-    VectorstorePool.clear_cache()
     logger.info("All connections shut down")
 
 

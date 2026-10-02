@@ -34,22 +34,27 @@ class Settings(BaseSettings):
     supabase_service_key: str = ""            # service role key (scripts only)
 
     # ── LLM ───────────────────────────────────────────────────────────────────
-    llm_model: str = "arcee-ai/trinity-large-preview:free"
-    small_llm_model: str = "arcee-ai/trinity-large-preview:free"
+    # Primary LLM model for generation
+    llm_model: str = "moonshotai/kimi-k3"
+    # Smaller fallback model for cheaper calls
+    small_llm_model: str = "gpt-oss-20b"
     llm_temperature: float = 0.0
-    openrouter_api_key: str = ""
-    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    # Switching from Groq to NVIDIA NIM – use the NIM endpoint/key
+    nim_api_key: str = ""
+    nim_base_url: str = "https://integrate.nvidia.com/v1"
+    # Deprecated Groq fields left empty for backward compatibility
     groq_api_key: str = ""
-    groq_model: str = "llama-3.3-70b-versatile"
+    groq_model: str = ""
     llm_timeout_seconds: int = 30
 
     # ── Embeddings ────────────────────────────────────────────────────────────
     embedding_model: str = "BAAI/bge-base-en-v1.5"  # must match pgvector index dimension (768)
     hf_api_key: str = ""
 
-    # ── Pinecone (DEPRECATED: Using Supabase pgvector) ──────────────────────
+    # ── Pinecone (REMOVED: Supabase pgvector is the vector store) ─────────────
+    # Fields retained as Optional so old .env files with PINECONE_* don't crash.
     pinecone_api_key: Optional[str] = None
-    pinecone_index_name: str = "coffee-products"
+    pinecone_index_name: str = "coffee-products"  # ignored at runtime
 
     # ── Retriever ─────────────────────────────────────────────────────────────
     retriever_default_top_k: int = 5
@@ -97,9 +102,9 @@ class Settings(BaseSettings):
                 "SUPABASE_KEY": self.supabase_key,
             }.items() if not val
         ]
-        # Require at least one LLM provider
-        if not self.groq_api_key and not self.openrouter_api_key:
-            missing.append("GROQ_API_KEY (or OPENROUTER_API_KEY as fallback)")
+        # Primary LLM provider is now NVIDIA NIM
+        if not self.nim_api_key:
+            missing.append("NIM_API_KEY")
         if missing:
             raise ValueError(f"Missing required env vars: {', '.join(missing)}")
 
@@ -122,17 +127,22 @@ class Config:
     LLM_MODEL = settings.llm_model
     SMALL_LLM_MODEL = settings.small_llm_model
     LLM_TEMPERATURE = settings.llm_temperature
-    OPENROUTER_API_KEY = settings.openrouter_api_key
-    OPENROUTER_BASE_URL = settings.openrouter_base_url
-    GROQ_API_KEY = settings.groq_api_key
-    GROQ_MODEL = settings.groq_model
+    # ── NVIDIA NIM (active LLM provider) ──────────────────────────────────────
+    NIM_API_KEY = settings.nim_api_key
+    NIM_BASE_URL = settings.nim_base_url
     LLM_TIMEOUT_SECONDS = settings.llm_timeout_seconds
+    # ── Deprecated provider stubs (kept so old imports don't break) ───────────
+    GROQ_API_KEY = settings.groq_api_key   # empty; Groq replaced by NIM
+    GROQ_MODEL = settings.groq_model        # empty
+    OPENROUTER_API_KEY = ""                 # removed from Settings
+    OPENROUTER_BASE_URL = ""                # removed from Settings
 
     EMBEDDING_MODEL = settings.embedding_model
     HF_API_KEY = settings.hf_api_key
 
-    PINECONE_API_KEY = settings.pinecone_api_key
-    PINECONE_INDEX_NAME = settings.pinecone_index_name
+    # Pinecone removed; pgvector is the active vector store
+    PINECONE_API_KEY = settings.pinecone_api_key   # None
+    PINECONE_INDEX_NAME = settings.pinecone_index_name  # ignored
 
     RETRIEVER_DEFAULT_TOP_K = settings.retriever_default_top_k
     RETRIEVER_MAX_TOP_K = settings.retriever_max_top_k

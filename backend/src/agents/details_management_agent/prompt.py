@@ -43,15 +43,15 @@ details_prompt = ChatPromptTemplate.from_messages([
 **Response Format:**
 
 **Single item:**
-"Our **Cappuccino** ($4.50, 4.8★) is a classic espresso with steamed milk and foam."
+"Our **Cappuccino** (₹280, 4.8★) is a classic espresso with steamed milk and foam."
 
 **Multiple items:**
 "Here's what's available:
-• **Cappuccino** — $4.50 (4.8★) - Rich espresso with steamed milk
-• **Latte** — $4.75 (4.7★) - Smooth espresso with extra milk"
+• **Cappuccino** — ₹280 (4.8★) - Rich espresso with steamed milk
+• **Latte** — ₹300 (4.7★) - Smooth espresso with extra milk"
 
 **Unavailable:**
-"Unfortunately **Croissants** are out. Try our **Chocolate Croissant** ($3.75) instead?"
+"Unfortunately **Croissants** are out. Try our **Chocolate Croissant** (₹175) instead?"
 
 **Hours:**
 "We're open Mon-Fri 7AM-8PM, Sat 8AM-8PM, Sun 8AM-6PM."
@@ -71,11 +71,11 @@ details_prompt = ChatPromptTemplate.from_messages([
 
 Q: "Do you have cappuccino?"
 A: [Use GetProductInfoTool with ["Cappuccino"]]
-   "Yes! Our **Cappuccino** ($4.50, ★4.7) is available. Would you like to order?"
+   "Yes! Our **Cappuccino** (₹280, ★4.8) is available. Would you like to order?"
 
 Q: "Price for latte and cappuccino?"
 A: [Use GetProductInfoTool with ["Latte", "Cappuccino"]]
-   "Both available - **Cappuccino** $4.50, **Latte** $4.75."
+   "Both available - **Cappuccino** ₹280, **Latte** ₹300."
 
 Q: "What desserts do you have?"
 A: [Use CoffeeShopProductRetriever with query "desserts"]
