@@ -41,7 +41,7 @@ class Settings(BaseSettings):
     llm_temperature: float = 0.0
     # Switching from Groq to NVIDIA NIM – use the NIM endpoint/key
     nim_api_key: str = ""
-    nim_base_url: str = "https://integrate.nvidia.com/v1"
+    nim_base_url: str = "https://integrate.api.nvidia.com/v1"
     # Deprecated Groq fields left empty for backward compatibility
     groq_api_key: str = ""
     groq_model: str = ""
