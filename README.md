@@ -7,8 +7,8 @@
   <img src="https://img.shields.io/badge/FastAPI-Backend-009688?style=for-the-badge&logo=fastapi&logoColor=white" />
   <img src="https://img.shields.io/badge/React-Frontend-61DAFB?style=for-the-badge&logo=react&logoColor=black" />
   <img src="https://img.shields.io/badge/Supabase-Database%20%2B%20Auth-3ECF8E?style=for-the-badge&logo=supabase&logoColor=white" />
-  <img src="https://img.shields.io/badge/Groq-LLM-F55036?style=for-the-badge" />
-  <img src="https://img.shields.io/badge/Pinecone-Vector%20DB-1C3657?style=for-the-badge" />
+  <img src="https://img.shields.io/badge/NVIDIA%20NIM-LLM-76B900?style=for-the-badge&logo=nvidia&logoColor=white" />
+  <img src="https://img.shields.io/badge/pgvector-Vector%20Search-4169E1?style=for-the-badge&logo=postgresql&logoColor=white" />
   <img src="https://img.shields.io/badge/Deployed-Render%20%2B%20Vercel-black?style=for-the-badge&logo=vercel&logoColor=white" />
 </p>
 
@@ -88,7 +88,7 @@ Every message passes through this graph in order:
 │ │        │  │              │  │              │  │       │             │
 │ │RAG     │  │CRUD + HITL   │  │Hybrid model: │  │Stream │             │
 │ │loop    │  │interrupt()   │  │popularity +  │  │tokens │             │
-│ │Pinecone│  │Live prices   │  │apriori +     │  │SSE    │             │
+│ │pgvector│  │Live prices   │  │apriori +     │  │SSE    │             │
 │ │search  │  │from Supabase │  │content-based │  │       │             │
 │ └────────┘  └──────────────┘  └──────────────┘  └───────┘             │
 └─────────────────────────────────────────────────────────────────────────┘
@@ -128,7 +128,7 @@ Admin Query
 │         │                                                               │
 │         ▼                                                               │
 │  ┌─────────────┐                                                        │
-│  │  Generation │  Groq LLM receives: schema + query + chat history      │
+│  │  Generation │  NVIDIA NIM receives: schema + query + chat history   │
 │  │    Node     │  → generates raw PostgreSQL                           │
 │  └──────┬──────┘                                                        │
 │         │                                                               │
@@ -178,7 +178,6 @@ graph TB
 
     subgraph Data["🗄️ Data Layer"]
         SB["Supabase\nPostgreSQL + Auth + pgvector"]
-        PC["Pinecone\nVector DB"]
         M0["Mem0 Cloud\nSemantic Memory"]
     end
 
@@ -192,11 +191,11 @@ graph TB
 
 | Layer | Technology |
 |-------|-----------|
-| **LLM** | Groq `llama-3.3-70b-versatile` + OpenRouter fallback |
+| **LLM** | NVIDIA NIM — `moonshotai/kimi-k3` (primary) · `gpt-oss-20b` (small/router) |
 | **Agent Framework** | LangGraph (StateGraph, interrupt, checkpointing) |
 | **Embeddings** | `BAAI/bge-base-en-v1.5` via HuggingFace |
 | **Semantic Memory** | Mem0 Cloud |
-| **Vector Search** | Pinecone |
+| **Vector Search** | Supabase pgvector (product search + schema metadata) |
 | **Database** | Supabase (PostgreSQL + Auth + pgvector) |
 | **Backend** | FastAPI + Uvicorn, Python 3.12, `uv` |
 | **Frontend** | React 18, Vite, Tailwind CSS, Recharts |

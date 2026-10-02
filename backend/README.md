@@ -63,8 +63,8 @@ backend/
 │   │   └── session_manager.py  # Atomic message append via RPC, load_messages
 │   │
 │   ├── rag/
-│   │   ├── retriever.py        # Pinecone query_products, retrieve_price_by_name
-│   │   └── vector_db_setup.py  # One-time catalog indexing script
+│   │   ├── retriever.py        # pgvector query_products, retrieve_price_by_name
+│   │   └── vector_db_setup.py  # (deprecated) one-time Pinecone indexing — pgvector used instead
 │   │
 │   ├── recommender/
 │   │   └── hybrid_recommender.py # Fit, score (pop+apriori+content), recommend, persist
@@ -76,7 +76,7 @@ backend/
 │   │   └── schemas.py          # Tool input/output pydantic models
 │   │
 │   └── utils/
-│       ├── util.py             # LLMPool, EmbeddingPool, PineconePool (thread-safe singletons)
+│       ├── util.py             # LLMPool, EmbeddingPool (thread-safe singletons, NVIDIA NIM)
 │       ├── email_util.py       # Resend email receipts
 │       └── logger.py           # Structured logger setup
 │
@@ -138,7 +138,7 @@ CoffeeAgentState {
 #### Node 4 — Details Agent
 - **Job**: Answer product/shop info questions using RAG
 - Runs an **agentic tool-calling loop** — can call `rag_tool` multiple times with refined queries
-- Tools: `rag_tool` (Pinecone), `product_info_tool` (Supabase), `about_us_tool` (txt file)
+- Tools: `rag_tool` (pgvector / Supabase), `product_info_tool` (Supabase), `about_us_tool` (txt file)
 - Max 5 iterations to prevent infinite loops
 
 #### Node 5 — Order Agent
@@ -171,7 +171,7 @@ query → embed() → pgvector search on coffee_shop_schema_metadata
 
 #### Node 2 — Generation
 ```python
-(schema_context + query + history + error?) → Groq LLM → raw SQL
+(schema_context + query + history + error?) → NVIDIA NIM LLM → raw SQL
 # error is injected on retries — LLM self-corrects
 ```
 
@@ -308,7 +308,7 @@ CREATE TABLE coffee_shop_orders (
   user_email TEXT NOT NULL,
   items      JSONB NOT NULL DEFAULT '[]',
   total      FLOAT NOT NULL DEFAULT 0,
-  status     TEXT NOT NULL DEFAULT 'active',  -- active | confirmed | cancelled
+  status     TEXT NOT NULL DEFAULT 'pending',  -- pending | confirmed
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -347,12 +347,11 @@ Full schema with all RPC functions: [`supabase_db/schema.sql`](./supabase_db/sch
 Copy `.env.example` to `.env` and fill in:
 
 ```env
-# ── LLM ──────────────────────────────────────────────────────────────────────
-GROQ_API_KEY=                   # Primary LLM provider (fast + cheap)
-GROQ_MODEL=llama-3.3-70b-versatile
-
-OPENROUTER_API_KEY=             # Fallback if Groq rate-limits
-LLM_MODEL=arcee-ai/trinity-large-preview:free
+# ── LLM (NVIDIA NIM) ──────────────────────────────────────────────────────────
+NIM_API_KEY=                    # nvapi-... key from build.nvidia.com
+NIM_BASE_URL=https://integrate.api.nvidia.com/v1
+LLM_MODEL=moonshotai/kimi-k3    # Primary (large) model
+SMALL_LLM_MODEL=gpt-oss-20b     # Small model for router + structured output
 
 # ── Embeddings ────────────────────────────────────────────────────────────────
 HF_API_KEY=
@@ -361,21 +360,20 @@ EMBEDDING_MODEL=BAAI/bge-base-en-v1.5
 # ── Semantic Memory ───────────────────────────────────────────────────────────
 MEM0_API_KEY=
 
-# ── Vector Store ──────────────────────────────────────────────────────────────
-PINECONE_API_KEY=
-PINECONE_INDEX_NAME=coffee-products
-
 # ── Supabase ──────────────────────────────────────────────────────────────────
 SUPABASE_URL=
 SUPABASE_KEY=                   # anon/public key — used only for auth verification
 SUPABASE_SERVICE_KEY=           # service role key — used for all DB operations
 SUPABASE_DB_URL=                # postgres:// URI — used by LangGraph PostgresSaver on Render
 
-# ── Email Receipts ────────────────────────────────────────────────────────────
-RESEND_API_KEY=
-FROM_EMAIL=receipts@merrsway.coffee
+# ── Email Receipts (SMTP) ─────────────────────────────────────────────────────
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USER=
+SMTP_PASSWORD=
+SMTP_FROM_EMAIL=Coffee Shop <noreply@coffeeshop.com>
 
-# ── CORS ─────────────────────────────────────────────────────────────────────
+# ── CORS ──────────────────────────────────────────────────────────────────────
 ALLOWED_ORIGINS=https://your-app.vercel.app  # comma-separated for multiple origins
 ```
 
