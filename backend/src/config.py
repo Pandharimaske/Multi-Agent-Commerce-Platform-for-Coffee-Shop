@@ -35,9 +35,9 @@ class Settings(BaseSettings):
 
     # ── LLM ───────────────────────────────────────────────────────────────────
     # Primary LLM model for generation
-    llm_model: str = "moonshotai/kimi-k3"
+    llm_model: str = "openai/gpt-oss-20b"
     # Smaller fallback model for cheaper calls
-    small_llm_model: str = "gpt-oss-20b"
+    small_llm_model: str = "openai/gpt-oss-20b"
     llm_temperature: float = 0.0
     # Switching from Groq to NVIDIA NIM – use the NIM endpoint/key
     nim_api_key: str = ""
@@ -45,7 +45,7 @@ class Settings(BaseSettings):
     # Deprecated Groq fields left empty for backward compatibility
     groq_api_key: str = ""
     groq_model: str = ""
-    llm_timeout_seconds: int = 30
+    llm_timeout_seconds: int = 60
 
     # ── Embeddings ────────────────────────────────────────────────────────────
     embedding_model: str = "BAAI/bge-base-en-v1.5"  # must match pgvector index dimension (768)

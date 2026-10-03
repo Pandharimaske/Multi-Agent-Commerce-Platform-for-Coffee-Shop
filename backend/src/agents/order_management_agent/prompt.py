@@ -19,7 +19,7 @@ Classify into one of four actions:
 **Rules:**
 - No existing order + item request → "create"
 - Existing order + "add X", "also X", "remove X", "change X" → "update"
-- "yes", "yeah", "confirm", "go ahead", "place it", "ok", "sure", "do it", "sounds good", "that's correct" → "confirm"
+- "yes", "yeah", "confirm", "go ahead", "place it", "ok", "sure", "do it", "sounds good", "that's correct", "that's it", "that's all", "checkout", "check out", "pay", "place my order", "get my order", "i'm done" → "confirm" (when there IS an existing order)
 - "cancel", "nevermind", "forget it", "no", "don't want it", "clear order" → "cancel"
 - If the last bot message contains "Shall I confirm" or "confirm this order" and user says yes/sure/ok/please/go ahead → always "confirm"
 - When in doubt between confirm/cancel, look at the conversation context

@@ -15,7 +15,7 @@ _checkpointer = None
 def _get_checkpointer():
     """
     Checkpointer strategy:
-    - macOS dev  → SqliteSaver (file-backed, survives --reload, no psycopg issues)
+    - macOS dev  → MemorySaver (in-memory, resets on restart; avoids psycopg issues)
     - Linux/prod → PostgresSaver via connection pool (Supabase Transaction Pooler)
     - Fallback   → MemorySaver (last resort, resets on restart)
 
@@ -34,15 +34,12 @@ def _get_checkpointer():
     db_uri = os.getenv("SUPABASE_DB_URL")
 
     if is_mac or not db_uri:
-        # macOS dev: use SQLite so checkpoints survive --reload
-        try:
-            from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-            _checkpointer = AsyncSqliteSaver.from_conn_string("./dev_checkpoints.db")
-            log.info("SqliteSaver checkpointer initialised (dev_checkpoints.db)")
-        except Exception as e:
-            log.warning(f"SqliteSaver unavailable ({e}), falling back to MemorySaver")
-            from langgraph.checkpoint.memory import MemorySaver
-            _checkpointer = MemorySaver()
+        # Dev / no DB configured: in-memory checkpointer (works with the async graph).
+        # NOTE: AsyncSqliteSaver.from_conn_string() returns an async context manager,
+        # not a saver, so it cannot be passed to compile(). State resets on restart.
+        from langgraph.checkpoint.memory import MemorySaver
+        _checkpointer = MemorySaver()
+        log.info("MemorySaver checkpointer initialised (state resets on restart)")
         return _checkpointer
 
     # Production (Linux): use persistent Postgres checkpointer

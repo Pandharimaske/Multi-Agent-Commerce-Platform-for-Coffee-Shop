@@ -120,6 +120,11 @@ class LLMPool:
         """
         temperature = temperature if temperature is not None else Config.LLM_TEMPERATURE
         model_name = model_name or Config.LLM_MODEL
+        # NIM model IDs are namespaced ("org/name"). Auto-fix known bare IDs.
+        _bare_to_nim = {"gpt-oss-20b": "openai/gpt-oss-20b"}
+        if model_name in _bare_to_nim:
+            logger.warning(f"Model ID '{model_name}' has no org prefix; using '{_bare_to_nim[model_name]}'")
+            model_name = _bare_to_nim[model_name]
         key = f"{model_name}_{temperature}"
 
         if key in LLMPool._models:

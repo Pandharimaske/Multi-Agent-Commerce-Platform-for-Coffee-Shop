@@ -13,11 +13,47 @@ const Spinner = () => (
   <div className="w-5 h-5 border-2 border-t-transparent border-[#dfc18b] rounded-full animate-spin" />
 );
 
+// Renders chart_data as a table (chart_type === "table", or any unknown chart type)
+const DataTable = ({ rows }) => {
+  const columns = Object.keys(rows[0] || {});
+  const fmt = (v) => {
+    if (typeof v === "number") return v.toLocaleString("en-IN", { maximumFractionDigits: 2 });
+    if (v === null || v === undefined) return "—";
+    return String(v);
+  };
+  const label = (k) => k.replace(/_/g, " ");
+  return (
+    <div className="overflow-x-auto my-6 w-full rounded-2xl border border-white/10 shadow-2xl bg-white/5 backdrop-blur-md">
+      <table className="min-w-full text-sm text-left">
+        <thead className="bg-white/10 text-[#dfc18b] font-bold uppercase tracking-wider text-xs">
+          <tr>
+            {columns.map((c) => (
+              <th key={c} className="px-6 py-4">{label(c)}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-white/5">
+          {rows.map((row, i) => (
+            <tr key={i}>
+              {columns.map((c) => (
+                <td key={c} className="px-6 py-4 text-white/90">{fmt(row[c])}</td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+};
+
 // New Chart Renderer component that works from structured state
 const ChartRenderer = ({ state }) => {
   if (!state || state.chart_type === "none") return null;
 
   const { chart_type, chart_data } = state;
+  if (!Array.isArray(chart_data) || chart_data.length === 0) return null;
+  // Anything that is not bar/pie/line (e.g. "table") is shown as a table
+  if (!["bar", "pie", "line"].includes(chart_type)) return <DataTable rows={chart_data} />;
   const COLORS = ['#dfc18b', '#a37c35', '#7e5d26', '#d4af37', '#b8860b'];
 
   return (

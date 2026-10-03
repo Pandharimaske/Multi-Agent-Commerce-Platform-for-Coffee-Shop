@@ -260,16 +260,8 @@ async def order_management_agent(state: CoffeeAgentState, config: RunnableConfig
             if user_id != "anonymous":
                 save_order(user_id, new_order, total)
 
-            msg = await _generate_dynamic_response(
-                action_type="create",
-                items_impacted=[i.name for i in new_order],
-                current_order=[f"{i.name} x{i.quantity}" for i in new_order],
-                total_price=total,
-                unavailable_items=unavailable,
-                status_message=summary,
-                user_input=user_input,
-                messages=messages
-            )
+            # Deterministic text: never let the LLM claim the order is confirmed here.
+            msg = summary
 
             return Command(
                 update={"order": new_order, "final_price": total, "response_message": msg, "messages": [AIMessage(content=msg)]},
@@ -345,16 +337,8 @@ async def order_management_agent(state: CoffeeAgentState, config: RunnableConfig
             if user_id != "anonymous":
                 save_order(user_id, updated_order, total)
 
-            msg = await _generate_dynamic_response(
-                action_type="update",
-                items_impacted=[f"{u.name} (set to {u.set_quantity if u.set_quantity is not None else 'adjusted by ' + str(u.delta_quantity)})" for u in parsed.updates],
-                current_order=[f"{i.name} x{i.quantity}" for i in updated_order],
-                total_price=total,
-                unavailable_items=[],
-                status_message=summary,
-                user_input=user_input,
-                messages=messages
-            )
+            # Deterministic text: never let the LLM claim the order is confirmed here.
+            msg = summary
 
             return Command(
                 update={"order": updated_order, "final_price": total, "response_message": msg, "messages": [AIMessage(content=msg)]},

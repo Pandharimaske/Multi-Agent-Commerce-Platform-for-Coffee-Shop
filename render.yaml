@@ -12,8 +12,16 @@ services:
         value: false
       - key: ALLOWED_ORIGINS
         sync: false   # set manually in Render dashboard to your Vercel URL
-      - key: OPENROUTER_API_KEY
+      - key: NIM_API_KEY
         sync: false
+      - key: NIM_BASE_URL
+        value: https://integrate.api.nvidia.com/v1
+      - key: LLM_MODEL
+        value: openai/gpt-oss-20b
+      - key: SMALL_LLM_MODEL
+        value: openai/gpt-oss-20b
+      - key: LLM_TIMEOUT_SECONDS
+        value: "60"
       - key: HF_API_KEY
         sync: false
       - key: PINECONE_API_KEY
@@ -25,6 +33,8 @@ services:
       - key: SUPABASE_KEY
         sync: false
       - key: SUPABASE_SERVICE_KEY
+        sync: false
+      - key: SUPABASE_DB_URL
         sync: false
       - key: SECRET_KEY
         generateValue: true

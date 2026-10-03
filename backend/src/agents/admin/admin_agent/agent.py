@@ -147,7 +147,7 @@ def scrub_sql(sql: str) -> str:
 
 async def generate_sql(query: str, schema_context: str, history: List[Dict[str, str]] = None, error_context: str = None) -> str:
     """SQL Generation Phase with Optional Retry Context"""
-    current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    current_time = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=5, minutes=30))).strftime("%Y-%m-%d %H:%M:%S") + " IST"
     history = history or []
     history_str = ""
     for msg in history[-5:]:
@@ -169,12 +169,15 @@ Guidelines:
 3. For JSONB columns (like 'items' in orders), expand them using: CROSS JOIN LATERAL jsonb_array_elements(o.items) AS item
 4. IMPORTANT: Always use parentheses when casting JSONB values for math or aggregation. Example: (item->>'total_price')::numeric.
 5. Refer to expanded JSONB items as 'item', NOT 'o.item'.
-6. DATE PATTERNS:
-   - Today: updated_at::date = CURRENT_DATE
-   - Yesterday: updated_at::date = CURRENT_DATE - INTERVAL '1 day'
-   - This Month: date_trunc('month', updated_at) = date_trunc('month', CURRENT_DATE)
-   - Weekwise: date_trunc('week', updated_at)
-7. Filter for status = 'confirmed' unless otherwise specified.
+6. DATE PATTERNS (the shop is in India: ALWAYS convert timestamps to IST with AT TIME ZONE 'Asia/Kolkata'):
+   - Today: (updated_at AT TIME ZONE 'Asia/Kolkata')::date = (now() AT TIME ZONE 'Asia/Kolkata')::date
+   - Yesterday: (updated_at AT TIME ZONE 'Asia/Kolkata')::date = (now() AT TIME ZONE 'Asia/Kolkata')::date - 1
+   - This Month: date_trunc('month', updated_at AT TIME ZONE 'Asia/Kolkata') = date_trunc('month', now() AT TIME ZONE 'Asia/Kolkata')
+   - This Year: date_trunc('year', updated_at AT TIME ZONE 'Asia/Kolkata') = date_trunc('year', now() AT TIME ZONE 'Asia/Kolkata')
+   - Weekwise: date_trunc('week', updated_at AT TIME ZONE 'Asia/Kolkata')
+7. TIME SERIES: when the user asks for a report/trend over a period (this year, this month, last N days), include EVERY period in the range, with 0 for periods that have no orders, using generate_series and a LEFT JOIN. Do NOT use WITH/CTEs (only plain SELECT is allowed). Example for sales per month this year:
+   SELECT to_char(m, 'Mon YYYY') AS name, COALESCE(SUM(o.total), 0) AS value FROM generate_series(date_trunc('year', now() AT TIME ZONE 'Asia/Kolkata'), date_trunc('month', now() AT TIME ZONE 'Asia/Kolkata'), interval '1 month') AS m LEFT JOIN coffee_shop_orders o ON date_trunc('month', o.updated_at AT TIME ZONE 'Asia/Kolkata') = m AND o.status = 'confirmed' GROUP BY m ORDER BY m
+8. Filter for status = 'confirmed' unless otherwise specified.
 """
     response = await llm.ainvoke([SystemMessage(content=system_prompt), HumanMessage(content=query)])
     return response.content.strip()
@@ -204,7 +207,11 @@ async def format_response(query: str, results: List[Dict], sql: str, history: Li
 }}
 
 Guidelines:
-1. Narrative should summarize trends, not just list data.
+1. All money amounts are in Indian Rupees. Always write currency as ₹ (never $).
+1a. Base the narrative ONLY on the numbers in Results. Do NOT invent causes, seasonality, marketing, or operational reasons, and do not give advice unless asked.
+1b. Today's date is {datetime.date.today().isoformat()}. If the latest period in the results is the current, still-incomplete day or month, say it is partial so far and do NOT describe it as a decline.
+1c. Describe a trend only when there are at least 3 complete periods. With fewer, just state the figures and compare them plainly. If periods have zero or no data, say so.
+1d. Be concise: 1-3 sentences with the exact figures from Results.
 2. If the data is tabular but not a trend/ranking, use chart_type: "table".
 3. Use chart_type: "none" if no data is found or a chart doesn't make sense.
 4. Keep the JSON structure strict. No extra text.
