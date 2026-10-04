@@ -181,6 +181,23 @@ The README promises a parallel `asyncio.gather` pre-load including Mem0 semantic
 - [ ] `reseed_prices.py` includes a fallback `CREATE TABLE` with `BIGSERIAL` ids and `TEXT[]` columns that contradicts `schema.sql`. Remove it.
 - [ ] Add a validation script that checks the catalog: unique names, required fields, allergen tags present, price > 0, ingredient list non-empty.
 
+### P1-11. LLM provider: code, deploy config and docs all disagree
+
+Current state as read from disk:
+
+- `src/utils/util.py` builds every LLM through `ChatOpenAI` pointed at **NVIDIA NIM** (`NIM_BASE_URL`, default `https://integrate.api.nvidia.com/v1`). There is no Groq client and no OpenRouter fallback in this file.
+- `src/config.py` defaults: `llm_model = "moonshotai/kimi-k3"`, `small_llm_model = "gpt-oss-20b"`. Verify both IDs exist in the NIM catalog (NIM usually namespaces them, for example `openai/gpt-oss-20b`). A wrong ID returns a 404 once DNS works.
+- `render.yaml` (repo root; there is no `backend/render.yaml`) still lists `OPENROUTER_API_KEY` and `PINECONE_*` and has **no** `NIM_API_KEY` or `NIM_BASE_URL`. A deploy from the blueprint will not get the variables the code needs. `util.py` calls `get_model()` at import, so a missing `NIM_API_KEY` crashes startup.
+- Both READMEs, the root tech-stack table and the resume bullet still say Groq `llama-3.3-70b` with an OpenRouter fallback.
+- `backend/.env.example` does not exist, although the README tells people to copy it.
+- `get_llm_error_message` hardcodes "NVIDIA NIM" and `NIM_API_KEY` in messages and treats any exception containing the word "connection" as a provider outage.
+
+Fix
+- [ ] Decide the real provider setup and make code, `render.yaml`, `.env.example`, both READMEs and the resume say the same thing.
+- [ ] If you want resilience, add a real fallback (`llm.with_fallbacks([...])`) rather than relying on the docs claiming one.
+- [ ] Add `NIM_API_KEY`, `NIM_BASE_URL`, `LLM_MODEL`, `SMALL_LLM_MODEL` to `render.yaml`; remove `OPENROUTER_API_KEY` and `PINECONE_*` if unused.
+- [ ] Set `max_retries` and a clear timeout on `ChatOpenAI`, and log the model name on each call (needed for eval).
+
 ### P2-1. Leftover Pinecone code
 
 Retrieval now uses Supabase pgvector (your resume is right; the README is stale), but Pinecone remnants are still around.
@@ -242,7 +259,7 @@ Run the baseline first, then make these changes and report before/after.
 - [ ] Second Supabase project for evaluation, with its own `.env.eval`.
 - [ ] Seed script generating a few hundred confirmed orders over a fixed 90-day window, using the real `items` shape (`name`, `quantity`, `per_unit_price`, `total_price`, `image_url`) and following the popularity CSV for the original products.
 - [ ] "Now" is injectable and pinned for the admin agent (P1-6).
-- [ ] Temperature 0, and the model that actually answered (Groq vs OpenRouter fallback) is logged on every call.
+- [ ] Temperature 0, and the model name is logged on every call. (`src/utils/util.py` currently uses a single provider, NVIDIA NIM, with no fallback; see P1-11.)
 - [ ] One canonical about-us source (P1-1).
 - [ ] Curated allergen tags in the catalog (P0-2).
 - [ ] BI role locked down (P0-1), so the adversarial SQL tests mean something.
