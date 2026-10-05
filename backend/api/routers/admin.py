@@ -73,7 +73,6 @@ async def chat_with_admin_agent(req: AdminChatRequest, current_user: CurrentUser
                 "session_id": session_id,
                 "user_email": current_user.email.lower().strip(),
                 "history": new_history,
-                "updated_at": "now()"
             }).execute()
         except Exception as e:
             logger.error(f"Error saving admin history: {e}")

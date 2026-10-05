@@ -25,6 +25,8 @@ from sklearn.preprocessing import MultiLabelBinarizer
 from typing import Optional
 import joblib
 
+from src.utils.allergens import user_allergy_conflicts
+
 logger = logging.getLogger(__name__)
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
@@ -224,10 +226,9 @@ class HybridRecommender:
         def _is_safe(name):
             p = self.products[name]
             ingredients = " ".join(str(i) for i in p.get("ingredients", [])).lower()
-            # Remove allergens
-            for allergen in allergies:
-                if allergen.lower() in ingredients:
-                    return False
+            # Remove allergens (word-aware and synonym-aware, see src/utils/allergens.py)
+            if user_allergy_conflicts(allergies, name, p.get("ingredients", [])):
+                return False
             # Remove cart items (already ordered)
             if name in cart:
                 return False

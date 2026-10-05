@@ -227,6 +227,8 @@ The final state returned to the dashboard is:
 ```mermaid
 erDiagram
     coffee_shop_profiles ||--o{ coffee_shop_orders : places
+    coffee_shop_orders ||--|{ coffee_shop_order_items : contains
+    coffee_shop_products ||--o{ coffee_shop_order_items : "ordered as"
     coffee_shop_profiles ||--o{ coffee_shop_sessions : owns
     coffee_shop_profiles ||--o{ coffee_shop_admin_sessions : "admin chats"
 
@@ -242,10 +244,20 @@ erDiagram
     coffee_shop_orders {
         uuid id PK
         text user_email FK
-        jsonb items
         float total
         text status
+        timestamptz created_at
+        timestamptz confirmed_at
         timestamptz updated_at
+    }
+    coffee_shop_order_items {
+        uuid id PK
+        uuid order_id FK
+        uuid product_id FK
+        text product_name
+        int quantity
+        numeric unit_price
+        numeric line_total
     }
     coffee_shop_products {
         uuid id PK
@@ -273,7 +285,7 @@ erDiagram
     }
 ```
 
-Order `status` is `pending` (the live cart) or `confirmed`. Cancelled orders are deleted. Order `items` are stored as `[{name, quantity, per_unit_price, total_price, image_url}]` and reference products by name.
+An order is a header row in `coffee_shop_orders` (`status` is `pending` for the live cart, or `confirmed`) plus one row per product in `coffee_shop_order_items`, with the unit price recorded at order time. Carts are saved and confirmed through database functions that price every line from the live menu, so client-sent prices are never trusted. Cancelled carts are deleted. The whole schema (tables, functions, policies and storage buckets) lives in [`backend/supabase_db/schema.sql`](./backend/supabase_db/schema.sql).
 
 ---
 
@@ -289,7 +301,7 @@ Order `status` is `pending` (the live cart) or `confirmed`. Cancelled orders are
 | **Separate customer and admin graphs** | Different users, risk profiles and state shapes, with admin access gated by `is_admin` in the profile table. |
 | **Self-healing Text-to-SQL** | The execution error is injected into the next generation prompt, up to two retries. |
 | **Parallel pre-load** | On `/chat`, session, profile, order, history and semantic-memory lookups run concurrently with `asyncio.gather` before the graph starts. |
-| **Atomic persistence** | Chat messages are appended with a database-side RPC, avoiding read-modify-write races. |
+| **Atomic persistence** | Chat messages are appended with a database-side RPC, avoiding read-modify-write races. Carts are replaced and confirmed in single database transactions, priced from the live menu. |
 | **Resilient menu endpoint** | `/products` is cached for 10 minutes and falls back to the bundled catalog if Supabase is unreachable. |
 
 ---
@@ -375,20 +387,17 @@ App: `http://localhost:5173`. Add this origin to `ALLOWED_ORIGINS` in the backen
 ### 4. One-time database setup
 
 1. Create a Supabase project and enable the `vector` extension.
-2. Run [`backend/supabase_db/schema.sql`](./backend/supabase_db/schema.sql) in the SQL editor.
+2. Run [`backend/supabase_db/schema.sql`](./backend/supabase_db/schema.sql) in the SQL editor. It creates every table, function, security policy and storage bucket the app needs. To wipe an existing project first, run [`reset_schema.sql`](./backend/supabase_db/reset_schema.sql) (this deletes all app data).
 3. Seed the data:
 
 ```bash
 cd backend
 uv run python scripts/seed_products.py          # catalog (58 items) + embeddings
-uv run python scripts/initialize_bi_agent.py    # BI schema tables and RPC functions
 uv run python scripts/index_metadata.py         # schema metadata embeddings for the BI agent
 uv run python scripts/migrate_images.py         # optional: product images to Supabase Storage
 ```
 
 4. To use the admin dashboard, set `is_admin = true` for your user in `coffee_shop_profiles`.
-
-> **Note:** a few database objects (the `embedding` column on products, the `match_coffee_products` search function and the `append_chat_messages` function) are not yet captured in `schema.sql`. See the [roadmap](#known-limitations-and-roadmap).
 
 ---
 
@@ -455,7 +464,7 @@ Set `SUPABASE_DB_URL` in production so checkout and approval state survive resta
 │   │   └── utils/                 # LLM and embedding pools, email, logging
 │   ├── scripts/                   # DB seeding, BI setup, recommender training
 │   ├── data/                      # product catalog, Apriori rules, popularity data, BI schema metadata
-│   ├── supabase_db/schema.sql     # core tables, indexes, RLS policies
+│   ├── supabase_db/                # schema.sql (complete schema) + reset_schema.sql (wipe)
 │   ├── Dockerfile, docker-compose.yml
 │   └── pyproject.toml, uv.lock
 └── frontend/
@@ -475,11 +484,10 @@ This project is under active development. Current gaps and planned work:
 
 **Safety and robustness**
 - Allergen matching is currently based on ingredient text. Curated per-product allergen tags with synonym handling, plus an allergen check at order time, are planned.
-- BI queries run through a database function that accepts `SELECT` statements only. A dedicated read-only database role, statement timeout and masked views are planned.
+- BI queries run through a service-role-only database function that accepts a single `SELECT` or `WITH` statement inside a read-only transaction and blocks system schemas. Masked views for personal data and a statement timeout are planned.
 - Mem0 retrieval is used on the non-streaming `/chat` path; wiring it into `/chat/stream` is pending.
 
 **Quality and operations**
-- Consolidate every database object (the products `embedding` column, `match_coffee_products`, `append_chat_messages`, BI functions) into `supabase_db/schema.sql` so a fresh project can be provisioned from the repo alone.
 - Single source of truth for shop information used by the details agent.
 - Automated tests in CI (deterministic logic such as filters and SQL handling) in addition to build checks.
 - LLM latency depends on the hosted model endpoint; a faster model for routing and extraction, and skipping unnecessary model calls, would shorten each chat turn.

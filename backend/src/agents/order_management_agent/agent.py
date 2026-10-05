@@ -22,6 +22,7 @@ from langchain_core.runnables import RunnableConfig
 from src.rag.retriever import get_product_by_name
 from src.orders import save_order, confirm_order, cancel_order
 from src.utils.email_util import send_order_receipt
+from src.utils.allergens import allergy_warning
 
 logger = logging.getLogger(__name__)
 
@@ -44,9 +45,15 @@ def _lookup_product(name: str) -> dict:
     return {"found": False}
 
 
-def _format_order_summary(order: List[ProductItem], final_price: float) -> str:
+def _format_order_summary(order: List[ProductItem], final_price: float, notes: str = "") -> str:
     lines = [f"  • {item.name} x{item.quantity} @ ₹{item.per_unit_price:.2f} = ₹{item.total_price:.2f}" for item in order]
-    return f"Here's your order:\n" + "\n".join(lines) + f"\n\n🧾 Total: ₹{final_price:.2f}\n\nShall I confirm this order?"
+    notes_block = f"\n\n{notes}" if notes else ""
+    return (
+        "Here's your order:\n" + "\n".join(lines)
+        + f"\n\n🧾 Total: ₹{final_price:.2f}"
+        + notes_block
+        + "\n\nShall I confirm this order?"
+    )
 
 
 def _mock_receipt(order: List[ProductItem], final_price: float, order_id: str = None) -> str:
@@ -102,7 +109,7 @@ async def order_management_agent(state: CoffeeAgentState, config: RunnableConfig
         last_bot_msg = ""
         for m in reversed(messages):
             if m.__class__.__name__ == "AIMessage":
-                last_bot_msg = m.content[:200]
+                last_bot_msg = m.content[-200:]
                 break
 
         action_decision: ActionDecision = await (detect_order_action_prompt | _action_llm).ainvoke({
@@ -140,23 +147,33 @@ async def order_management_agent(state: CoffeeAgentState, config: RunnableConfig
 
             if payment_status == "payment_success":
                 order_id = None
+                final_items, final_total = existing_order, state.final_price
                 if user_id != "anonymous":
-                    order_id = confirm_order(user_id, existing_order, state.final_price)
+                    confirmed = confirm_order(user_id, existing_order, state.final_price)
+                    if not confirmed:
+                        msg = "Sorry, something went wrong while placing your order. Your cart is still saved, so please try again in a moment."
+                        return Command(
+                            update={"response_message": msg, "messages": [AIMessage(content=msg)]},
+                            goto=END
+                        )
+                    # The database re-prices every line from the live menu, so use its values
+                    order_id = confirmed["order_id"]
+                    final_items, final_total = confirmed["items"], confirmed["total"]
                     # Fire-and-forget email receipt — failures logged, never crash order
                     import asyncio
                     async def _safe_send_receipt():
                         try:
-                            await send_order_receipt(user_id, existing_order, state.final_price, order_id)
+                            await send_order_receipt(user_id, final_items, final_total, order_id)
                         except Exception as mail_err:
                             logger.error(f"Email receipt failed for order {order_id}: {mail_err}")
                     asyncio.ensure_future(_safe_send_receipt())
                 
-                receipt = _mock_receipt(existing_order, state.final_price, order_id)
+                receipt = _mock_receipt(final_items, final_total, order_id)
                 msg = await _generate_dynamic_response(
                     action_type="confirm",
-                    items_impacted=[i.name for i in existing_order],
-                    current_order=[f"{i.name} x{i.quantity}" for i in existing_order],
-                    total_price=state.final_price,
+                    items_impacted=[i.name for i in final_items],
+                    current_order=[f"{i.name} x{i.quantity}" for i in final_items],
+                    total_price=final_total,
                     unavailable_items=[],
                     status_message=receipt,
                     user_input=user_input,
@@ -254,9 +271,13 @@ async def order_management_agent(state: CoffeeAgentState, config: RunnableConfig
                 )
                 return Command(update={"response_message": msg, "messages": [AIMessage(content=msg)]}, goto=END)
 
-            summary = _format_order_summary(new_order, total)
+            notes = []
             if unavailable:
-                summary += f"\n\n⚠️ Skipped (not on menu): {', '.join(unavailable)}"
+                notes.append(f"⚠️ Skipped (not on menu): {', '.join(unavailable)}")
+            warn = allergy_warning(getattr(state.user_memory, "allergies", None) or [], [i.name for i in new_order])
+            if warn:
+                notes.append(warn)
+            summary = _format_order_summary(new_order, total, "\n\n".join(notes))
             if user_id != "anonymous":
                 save_order(user_id, new_order, total)
 
@@ -333,7 +354,10 @@ async def order_management_agent(state: CoffeeAgentState, config: RunnableConfig
                     goto=END
                 )
 
-            summary = _format_order_summary(updated_order, total)
+            before_names = {i.name.lower() for i in existing_order}
+            added_names = [i.name for i in updated_order if i.name.lower() not in before_names]
+            warn = allergy_warning(getattr(state.user_memory, "allergies", None) or [], added_names)
+            summary = _format_order_summary(updated_order, total, warn)
             if user_id != "anonymous":
                 save_order(user_id, updated_order, total)
 

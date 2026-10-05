@@ -1,8 +1,13 @@
 import os
+import sys
 import json
 import logging
 import psycopg2
 from dotenv import load_dotenv
+
+# Allow running as `python scripts/index_metadata.py` from the backend folder
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from src.utils.util import get_embedding_model
 
 # Configure logging

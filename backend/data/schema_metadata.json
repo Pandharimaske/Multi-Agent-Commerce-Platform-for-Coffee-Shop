@@ -90,13 +90,19 @@
   {
     "type": "table",
     "name": "coffee_shop_orders",
-    "description": "Transactional data for all customer orders. Contains user email, order items, total amount, status (pending/confirmed), and timestamps. Use this for revenue analysis, sales tracking, and order history."
+    "description": "One row per customer order (order header). Contains user email, order total, status (pending/confirmed) and timestamps. The products inside an order are in coffee_shop_order_items. Use this for order counts, revenue and sales tracking."
   },
   {
     "type": "column",
     "table": "coffee_shop_orders",
-    "name": "items",
-    "description": "JSON field containing ordered items. Important: to query item names/quantities, use: jsonb_array_elements(items) AS item. Each item has {name, quantity, per_unit_price, total_price}."
+    "name": "confirmed_at",
+    "description": "Timestamp when the order was confirmed (paid). NULL for pending orders. Use this for ALL date-based sales calculations (today, this week, monthly)."
+  },
+  {
+    "type": "column",
+    "table": "coffee_shop_orders",
+    "name": "created_at",
+    "description": "Timestamp when the order (cart) was first created."
   },
   {
     "type": "column",
@@ -114,12 +120,53 @@
     "type": "column",
     "table": "coffee_shop_orders",
     "name": "updated_at",
-    "description": "Timestamp of the order. Use this for all date-based calculations (today, this week, monthly)."
+    "description": "Last time the order row was modified. Do NOT use it for sales dates; use confirmed_at instead."
   },
   {
     "type": "column",
     "table": "coffee_shop_orders",
     "name": "user_email",
     "description": "Email of the user who placed the order. Link this with coffee_shop_profiles to find customer details."
+  },
+  {
+    "type": "table",
+    "name": "coffee_shop_order_items",
+    "description": "Line items of orders: one row per product per order. Join to coffee_shop_orders with order_id = coffee_shop_orders.id. Use this for product-level sales, quantities sold, and revenue per product or category."
+  },
+  {
+    "type": "column",
+    "table": "coffee_shop_order_items",
+    "name": "order_id",
+    "description": "Foreign key to coffee_shop_orders.id."
+  },
+  {
+    "type": "column",
+    "table": "coffee_shop_order_items",
+    "name": "product_id",
+    "description": "Foreign key to coffee_shop_products.id. Join on it to get the product category, ingredients or rating."
+  },
+  {
+    "type": "column",
+    "table": "coffee_shop_order_items",
+    "name": "product_name",
+    "description": "Name of the product that was ordered (e.g. 'Latte')."
+  },
+  {
+    "type": "column",
+    "table": "coffee_shop_order_items",
+    "name": "quantity",
+    "description": "Number of units of the product in the order."
+  },
+  {
+    "type": "column",
+    "table": "coffee_shop_order_items",
+    "name": "unit_price",
+    "description": "Price per unit in Indian Rupees (₹) at the time of the order."
+  },
+  {
+    "type": "column",
+    "table": "coffee_shop_order_items",
+    "name": "line_total",
+    "description": "quantity * unit_price in Indian Rupees (₹). Use SUM(line_total) for revenue per product or category. Do not use coffee_shop_orders.total for that, because it would double count orders with several products."
   }
 ]

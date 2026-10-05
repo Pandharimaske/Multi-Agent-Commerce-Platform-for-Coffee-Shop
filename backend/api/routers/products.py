@@ -33,7 +33,7 @@ def _load_local_products() -> list[dict]:
                     continue
                 data = json.loads(line)
                 products.append({
-                    "id": i + 1,
+                    "id": str(i + 1),
                     "name": data["name"],
                     "category": data.get("category"),
                     "description": data.get("description"),

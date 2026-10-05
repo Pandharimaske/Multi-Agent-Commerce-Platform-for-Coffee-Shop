@@ -3,6 +3,7 @@ from src.orders.order_manager import (
     save_order,
     confirm_order,
     cancel_order,
+    get_order_history,
 )
 
 __all__ = [
@@ -10,4 +11,5 @@ __all__ = [
     "save_order",
     "confirm_order",
     "cancel_order",
+    "get_order_history",
 ]

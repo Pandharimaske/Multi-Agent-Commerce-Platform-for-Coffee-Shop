@@ -166,18 +166,20 @@ CONVERSATION HISTORY:
 Guidelines:
 1. Return ONLY raw SQL. No markdown block. No trailing semicolon.
 2. If charts are needed, aliasing columns as 'name' and 'value' is preferred.
-3. For JSONB columns (like 'items' in orders), expand them using: CROSS JOIN LATERAL jsonb_array_elements(o.items) AS item
-4. IMPORTANT: Always use parentheses when casting JSONB values for math or aggregation. Example: (item->>'total_price')::numeric.
-5. Refer to expanded JSONB items as 'item', NOT 'o.item'.
-6. DATE PATTERNS (the shop is in India: ALWAYS convert timestamps to IST with AT TIME ZONE 'Asia/Kolkata'):
-   - Today: (updated_at AT TIME ZONE 'Asia/Kolkata')::date = (now() AT TIME ZONE 'Asia/Kolkata')::date
-   - Yesterday: (updated_at AT TIME ZONE 'Asia/Kolkata')::date = (now() AT TIME ZONE 'Asia/Kolkata')::date - 1
-   - This Month: date_trunc('month', updated_at AT TIME ZONE 'Asia/Kolkata') = date_trunc('month', now() AT TIME ZONE 'Asia/Kolkata')
-   - This Year: date_trunc('year', updated_at AT TIME ZONE 'Asia/Kolkata') = date_trunc('year', now() AT TIME ZONE 'Asia/Kolkata')
-   - Weekwise: date_trunc('week', updated_at AT TIME ZONE 'Asia/Kolkata')
+3. Order headers are in coffee_shop_orders (alias o). The products inside each order are in coffee_shop_order_items (alias oi), one row per product per order. Join them with: JOIN coffee_shop_order_items oi ON oi.order_id = o.id. Use oi.product_name, oi.quantity, oi.unit_price and oi.line_total for product-level questions. To get a product's category or ingredients, also JOIN coffee_shop_products p ON p.id = oi.product_id.
+4. Revenue per product or per category MUST be SUM(oi.line_total). Revenue per order, per day or per customer is SUM(o.total). Never SUM(o.total) after joining to the items table, because it double counts orders with several products.
+5. The column coffee_shop_orders.items is a legacy column that is no longer filled. Never use it.
+6. DATE PATTERNS (the shop is in India: ALWAYS convert timestamps to IST with AT TIME ZONE 'Asia/Kolkata'). Use o.confirmed_at as the time an order was placed:
+   - Today: (o.confirmed_at AT TIME ZONE 'Asia/Kolkata')::date = (now() AT TIME ZONE 'Asia/Kolkata')::date
+   - Yesterday: (o.confirmed_at AT TIME ZONE 'Asia/Kolkata')::date = (now() AT TIME ZONE 'Asia/Kolkata')::date - 1
+   - This Month: date_trunc('month', o.confirmed_at AT TIME ZONE 'Asia/Kolkata') = date_trunc('month', now() AT TIME ZONE 'Asia/Kolkata')
+   - This Year: date_trunc('year', o.confirmed_at AT TIME ZONE 'Asia/Kolkata') = date_trunc('year', now() AT TIME ZONE 'Asia/Kolkata')
+   - Weekwise: date_trunc('week', o.confirmed_at AT TIME ZONE 'Asia/Kolkata')
 7. TIME SERIES: when the user asks for a report/trend over a period (this year, this month, last N days), include EVERY period in the range, with 0 for periods that have no orders, using generate_series and a LEFT JOIN. Do NOT use WITH/CTEs (only plain SELECT is allowed). Example for sales per month this year:
-   SELECT to_char(m, 'Mon YYYY') AS name, COALESCE(SUM(o.total), 0) AS value FROM generate_series(date_trunc('year', now() AT TIME ZONE 'Asia/Kolkata'), date_trunc('month', now() AT TIME ZONE 'Asia/Kolkata'), interval '1 month') AS m LEFT JOIN coffee_shop_orders o ON date_trunc('month', o.updated_at AT TIME ZONE 'Asia/Kolkata') = m AND o.status = 'confirmed' GROUP BY m ORDER BY m
-8. Filter for status = 'confirmed' unless otherwise specified.
+   SELECT to_char(m, 'Mon YYYY') AS name, COALESCE(SUM(o.total), 0) AS value FROM generate_series(date_trunc('year', now() AT TIME ZONE 'Asia/Kolkata'), date_trunc('month', now() AT TIME ZONE 'Asia/Kolkata'), interval '1 month') AS m LEFT JOIN coffee_shop_orders o ON date_trunc('month', o.confirmed_at AT TIME ZONE 'Asia/Kolkata') = m AND o.status = 'confirmed' GROUP BY m ORDER BY m
+8. Filter for o.status = 'confirmed' unless otherwise specified.
+9. Example for top products by revenue this month:
+   SELECT oi.product_name AS name, SUM(oi.line_total) AS value FROM coffee_shop_orders o JOIN coffee_shop_order_items oi ON oi.order_id = o.id WHERE o.status = 'confirmed' AND date_trunc('month', o.confirmed_at AT TIME ZONE 'Asia/Kolkata') = date_trunc('month', now() AT TIME ZONE 'Asia/Kolkata') GROUP BY oi.product_name ORDER BY value DESC LIMIT 5
 """
     response = await llm.ainvoke([SystemMessage(content=system_prompt), HumanMessage(content=query)])
     return response.content.strip()
