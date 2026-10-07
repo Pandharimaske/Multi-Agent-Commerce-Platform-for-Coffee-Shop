@@ -1,0 +1,124 @@
+[
+  {"question": "What are today's sales?", "tags": ["revenue", "today"],
+   "sql": "SELECT COALESCE(SUM(order_total), 0) AS revenue_today FROM orders WHERE status = 'confirmed' AND order_date = (now() AT TIME ZONE 'Asia/Kolkata')::date"},
+
+  {"question": "How many orders did we get today?", "tags": ["orders", "today"],
+   "sql": "SELECT COUNT(*) AS orders_today FROM orders WHERE status = 'confirmed' AND order_date = (now() AT TIME ZONE 'Asia/Kolkata')::date"},
+
+  {"question": "What were yesterday's sales?", "tags": ["revenue", "yesterday"],
+   "sql": "SELECT COALESCE(SUM(order_total), 0) AS revenue_yesterday FROM orders WHERE status = 'confirmed' AND order_date = (now() AT TIME ZONE 'Asia/Kolkata')::date - 1"},
+
+  {"question": "What are the sales this month?", "tags": ["revenue", "month"],
+   "sql": "SELECT COALESCE(SUM(order_total), 0) AS revenue_this_month FROM orders WHERE status = 'confirmed' AND order_month = date_trunc('month', now() AT TIME ZONE 'Asia/Kolkata')::date"},
+
+  {"question": "Show me this year's sales report month by month", "tags": ["revenue", "time_series", "year"],
+   "sql": "SELECT m::date AS month, COALESCE(SUM(o.order_total), 0) AS revenue FROM generate_series(date_trunc('year', now() AT TIME ZONE 'Asia/Kolkata'), date_trunc('month', now() AT TIME ZONE 'Asia/Kolkata'), interval '1 month') AS m LEFT JOIN orders o ON o.order_month = m::date AND o.status = 'confirmed' GROUP BY m ORDER BY m"},
+
+  {"question": "Daily sales for the last 7 days", "tags": ["revenue", "time_series", "daily"],
+   "sql": "SELECT days.d AS day, COALESCE(SUM(o.order_total), 0) AS revenue FROM (SELECT (now() AT TIME ZONE 'Asia/Kolkata')::date - n AS d FROM generate_series(0, 6) AS n) days LEFT JOIN orders o ON o.order_date = days.d AND o.status = 'confirmed' GROUP BY days.d ORDER BY days.d"},
+
+  {"question": "Weekly revenue trend for the last 8 weeks", "tags": ["revenue", "time_series", "weekly"],
+   "sql": "SELECT weeks.w AS week_start, COALESCE(SUM(o.order_total), 0) AS revenue FROM (SELECT (date_trunc('week', now() AT TIME ZONE 'Asia/Kolkata') - make_interval(weeks => n))::date AS w FROM generate_series(0, 7) AS n) weeks LEFT JOIN orders o ON o.order_week = weeks.w AND o.status = 'confirmed' GROUP BY weeks.w ORDER BY weeks.w"},
+
+  {"question": "Top 5 products by revenue this month", "tags": ["products", "ranking", "month"],
+   "sql": "SELECT product_name, SUM(line_total) AS revenue FROM order_items WHERE status = 'confirmed' AND order_month = date_trunc('month', now() AT TIME ZONE 'Asia/Kolkata')::date GROUP BY product_name ORDER BY revenue DESC LIMIT 5"},
+
+  {"question": "Best selling products by units sold of all time", "tags": ["products", "ranking", "quantity"],
+   "sql": "SELECT product_name, SUM(quantity) AS units_sold FROM order_items WHERE status = 'confirmed' GROUP BY product_name ORDER BY units_sold DESC, product_name LIMIT 10"},
+
+  {"question": "Which products have never been sold?", "tags": ["products", "never_sold"],
+   "sql": "SELECT p.product_name, p.category FROM products p WHERE NOT EXISTS (SELECT 1 FROM order_items i WHERE i.product_id = p.product_id AND i.status = 'confirmed') ORDER BY p.category, p.product_name"},
+
+  {"question": "Which products sold the least?", "tags": ["products", "ranking", "bottom"],
+   "sql": "SELECT product_name, SUM(quantity) AS units_sold FROM order_items WHERE status = 'confirmed' GROUP BY product_name ORDER BY units_sold ASC, product_name LIMIT 10"},
+
+  {"question": "Revenue by category this year", "tags": ["category", "revenue", "year"],
+   "sql": "SELECT category, SUM(line_total) AS revenue FROM order_items WHERE status = 'confirmed' AND EXTRACT(year FROM order_date) = EXTRACT(year FROM (now() AT TIME ZONE 'Asia/Kolkata')::date) GROUP BY category ORDER BY revenue DESC"},
+
+  {"question": "What share of revenue does each category contribute?", "tags": ["category", "share", "percent"],
+   "sql": "SELECT category, ROUND(SUM(line_total) * 100.0 / NULLIF(SUM(SUM(line_total)) OVER (), 0), 1) AS revenue_share_percent FROM order_items WHERE status = 'confirmed' GROUP BY category ORDER BY revenue_share_percent DESC"},
+
+  {"question": "Top selling product in each category", "tags": ["category", "products", "ranking"],
+   "sql": "SELECT category, product_name, revenue FROM (SELECT category, product_name, SUM(line_total) AS revenue, ROW_NUMBER() OVER (PARTITION BY category ORDER BY SUM(line_total) DESC) AS rn FROM order_items WHERE status = 'confirmed' GROUP BY category, product_name) t WHERE rn = 1 ORDER BY revenue DESC"},
+
+  {"question": "Compare this month's revenue with last month", "tags": ["revenue", "comparison", "month"],
+   "sql": "SELECT 'This month' AS period, COALESCE(SUM(order_total), 0) AS revenue FROM orders WHERE status = 'confirmed' AND order_month = date_trunc('month', now() AT TIME ZONE 'Asia/Kolkata')::date UNION ALL SELECT 'Last month', COALESCE(SUM(order_total), 0) FROM orders WHERE status = 'confirmed' AND order_month = (date_trunc('month', now() AT TIME ZONE 'Asia/Kolkata') - interval '1 month')::date"},
+
+  {"question": "What is the revenue growth percentage compared to last month?", "tags": ["revenue", "growth", "comparison"],
+   "sql": "SELECT cur.revenue AS this_month, prev.revenue AS last_month, ROUND((cur.revenue - prev.revenue) * 100.0 / NULLIF(prev.revenue, 0), 1) AS growth_percent FROM (SELECT COALESCE(SUM(order_total), 0) AS revenue FROM orders WHERE status = 'confirmed' AND order_month = date_trunc('month', now() AT TIME ZONE 'Asia/Kolkata')::date) cur CROSS JOIN (SELECT COALESCE(SUM(order_total), 0) AS revenue FROM orders WHERE status = 'confirmed' AND order_month = (date_trunc('month', now() AT TIME ZONE 'Asia/Kolkata') - interval '1 month')::date) prev"},
+
+  {"question": "What is the average order value this month?", "tags": ["aov", "month"],
+   "sql": "SELECT ROUND(AVG(order_total), 2) AS average_order_value FROM orders WHERE status = 'confirmed' AND order_month = date_trunc('month', now() AT TIME ZONE 'Asia/Kolkata')::date"},
+
+  {"question": "What are the total orders and total revenue so far?", "tags": ["totals", "all_time"],
+   "sql": "SELECT COUNT(*) AS total_orders, COALESCE(SUM(order_total), 0) AS total_revenue FROM orders WHERE status = 'confirmed'"},
+
+  {"question": "How many orders in the last 30 days?", "tags": ["orders", "last_n_days"],
+   "sql": "SELECT COUNT(*) AS orders_last_30_days FROM orders WHERE status = 'confirmed' AND order_date >= (now() AT TIME ZONE 'Asia/Kolkata')::date - 30"},
+
+  {"question": "What were the sales in September?", "tags": ["revenue", "named_month"],
+   "sql": "SELECT COALESCE(SUM(order_total), 0) AS revenue_september FROM orders WHERE status = 'confirmed' AND order_month = make_date(EXTRACT(year FROM (now() AT TIME ZONE 'Asia/Kolkata'))::int, 9, 1)"},
+
+  {"question": "Revenue between 1 October and 5 October 2026", "tags": ["revenue", "date_range"],
+   "sql": "SELECT COALESCE(SUM(order_total), 0) AS revenue FROM orders WHERE status = 'confirmed' AND order_date BETWEEN DATE '2026-10-01' AND DATE '2026-10-05'"},
+
+  {"question": "What are the busiest hours of the day?", "tags": ["hours", "traffic"],
+   "sql": "SELECT order_hour, COUNT(*) AS orders FROM orders WHERE status = 'confirmed' GROUP BY order_hour ORDER BY order_hour"},
+
+  {"question": "Which weekday is the busiest?", "tags": ["weekday", "traffic"],
+   "sql": "SELECT order_weekday, COUNT(*) AS orders FROM orders WHERE status = 'confirmed' GROUP BY order_weekday, order_weekday_num ORDER BY order_weekday_num"},
+
+  {"question": "Do we sell more in the morning, afternoon or evening?", "tags": ["time_of_day", "traffic"],
+   "sql": "SELECT CASE WHEN order_hour BETWEEN 5 AND 11 THEN 'Morning' WHEN order_hour BETWEEN 12 AND 16 THEN 'Afternoon' WHEN order_hour BETWEEN 17 AND 21 THEN 'Evening' ELSE 'Night' END AS time_of_day, COUNT(*) AS orders FROM orders WHERE status = 'confirmed' GROUP BY 1 ORDER BY orders DESC"},
+
+  {"question": "Who are our top 5 customers by spend?", "tags": ["customers", "ranking"],
+   "sql": "SELECT customer_id, total_spent FROM customers WHERE orders_count > 0 ORDER BY total_spent DESC, customer_id LIMIT 5"},
+
+  {"question": "How many repeat customers do we have?", "tags": ["customers", "repeat"],
+   "sql": "SELECT COUNT(*) FILTER (WHERE orders_count >= 2) AS repeat_customers, COUNT(*) FILTER (WHERE orders_count = 1) AS one_time_customers FROM customers"},
+
+  {"question": "How many new customers placed their first order each month?", "tags": ["customers", "new", "time_series"],
+   "sql": "SELECT date_trunc('month', first_order_at AT TIME ZONE 'Asia/Kolkata')::date AS month, COUNT(*) AS new_customers FROM customers WHERE first_order_at IS NOT NULL GROUP BY 1 ORDER BY 1"},
+
+  {"question": "How many customers signed up this month?", "tags": ["customers", "signups"],
+   "sql": "SELECT COUNT(*) AS new_signups FROM customers WHERE (joined_at AT TIME ZONE 'Asia/Kolkata')::date >= date_trunc('month', now() AT TIME ZONE 'Asia/Kolkata')::date"},
+
+  {"question": "Revenue by customer location", "tags": ["customers", "location", "revenue"],
+   "sql": "SELECT COALESCE(c.location, 'Unknown') AS location, SUM(o.order_total) AS revenue FROM orders o JOIN customers c ON c.customer_id = o.customer_id WHERE o.status = 'confirmed' GROUP BY 1 ORDER BY revenue DESC"},
+
+  {"question": "How many customers are allergic to nuts?", "tags": ["customers", "allergies"],
+   "sql": "SELECT COUNT(DISTINCT c.customer_id) AS customers_with_nut_allergy FROM customers c, jsonb_array_elements_text(c.allergies) AS a WHERE a ILIKE '%nut%'"},
+
+  {"question": "What are the most common customer allergies?", "tags": ["customers", "allergies", "ranking"],
+   "sql": "SELECT lower(a) AS allergy, COUNT(*) AS customers FROM customers c, jsonb_array_elements_text(c.allergies) AS a GROUP BY 1 ORDER BY customers DESC, allergy LIMIT 10"},
+
+  {"question": "What do our customers like the most?", "tags": ["customers", "preferences", "ranking"],
+   "sql": "SELECT lower(l) AS preference, COUNT(*) AS customers FROM customers c, jsonb_array_elements_text(c.likes) AS l GROUP BY 1 ORDER BY customers DESC, preference LIMIT 10"},
+
+  {"question": "How many abandoned carts do we have and what are they worth?", "tags": ["carts", "abandoned"],
+   "sql": "SELECT COUNT(*) AS abandoned_carts, COALESCE(SUM(order_total), 0) AS potential_revenue FROM orders WHERE status = 'pending' AND updated_at < now() - interval '24 hours'"},
+
+  {"question": "How many carts are open right now?", "tags": ["carts", "pending"],
+   "sql": "SELECT COUNT(*) AS open_carts FROM orders WHERE status = 'pending'"},
+
+  {"question": "Which products are bought together most often?", "tags": ["basket", "products"],
+   "sql": "SELECT a.product_name AS product_a, b.product_name AS product_b, COUNT(*) AS times_together FROM order_items a JOIN order_items b ON a.order_id = b.order_id AND a.product_name < b.product_name WHERE a.status = 'confirmed' GROUP BY a.product_name, b.product_name ORDER BY times_together DESC, product_a, product_b LIMIT 10"},
+
+  {"question": "What is the average number of items per order?", "tags": ["basket", "items"],
+   "sql": "SELECT ROUND(AVG(item_count), 2) AS avg_items_per_order FROM (SELECT order_id, SUM(quantity) AS item_count FROM order_items WHERE status = 'confirmed' GROUP BY order_id) t"},
+
+  {"question": "How many cappuccinos did we sell this month and how much revenue did they bring?", "tags": ["products", "named_product", "month"],
+   "sql": "SELECT COALESCE(SUM(quantity), 0) AS units_sold, COALESCE(SUM(line_total), 0) AS revenue FROM order_items WHERE status = 'confirmed' AND product_name ILIKE '%cappuccino%' AND order_month = date_trunc('month', now() AT TIME ZONE 'Asia/Kolkata')::date"},
+
+  {"question": "What are the highest rated products on the menu?", "tags": ["menu", "rating"],
+   "sql": "SELECT product_name, rating FROM products WHERE rating IS NOT NULL ORDER BY rating DESC, product_name LIMIT 10"},
+
+  {"question": "What is the average rating per category?", "tags": ["menu", "rating", "category"],
+   "sql": "SELECT category, ROUND(AVG(rating)::numeric, 2) AS avg_rating FROM products WHERE rating IS NOT NULL GROUP BY category ORDER BY avg_rating DESC"},
+
+  {"question": "What are the most expensive items on the menu?", "tags": ["menu", "price"],
+   "sql": "SELECT product_name, price FROM products ORDER BY price DESC, product_name LIMIT 10"},
+
+  {"question": "How many products are in each category?", "tags": ["menu", "category"],
+   "sql": "SELECT category, COUNT(*) AS products FROM products GROUP BY category ORDER BY products DESC, category"}
+]

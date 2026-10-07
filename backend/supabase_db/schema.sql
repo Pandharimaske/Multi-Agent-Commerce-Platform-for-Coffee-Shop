@@ -445,46 +445,192 @@ revoke all on function match_schema_metadata(vector, float, int) from public, an
 grant execute on function match_schema_metadata(vector, float, int) to service_role;
 
 
+-- ── BI layer: read-only views with anonymised customers ──────────────────────
+-- The Text-to-SQL agent never sees the real tables. Its queries run as the
+-- restricted role bi_readonly, which can only SELECT from the four views in the
+-- "bi" schema below:
+--   * customers are anonymised (a hash of the email); no names or emails exist here
+--   * dates and hours are pre-computed in India time (IST), so queries stay simple
+--   * pending carts are included (status = 'pending'); their order_* date columns are NULL
+do $$
+begin
+  if not exists (select 1 from pg_roles where rolname = 'bi_readonly') then
+    create role bi_readonly nologin;
+  end if;
+  execute format('grant bi_readonly to %I', current_user);
+exception when others then
+  raise notice 'Could not set up the bi_readonly role (%). The BI agent will not work until it exists.', sqlerrm;
+end;
+$$;
+
+create schema if not exists bi;
+
+create or replace view bi.orders as
+select
+  o.id                                                                  as order_id,
+  'C' || substr(md5(o.user_email), 1, 8)                                as customer_id,
+  o.status,
+  o.total                                                               as order_total,
+  o.created_at,
+  o.confirmed_at,
+  o.updated_at,
+  (o.confirmed_at at time zone 'Asia/Kolkata')::date                    as order_date,
+  date_trunc('month', o.confirmed_at at time zone 'Asia/Kolkata')::date as order_month,
+  date_trunc('week',  o.confirmed_at at time zone 'Asia/Kolkata')::date as order_week,
+  extract(hour   from o.confirmed_at at time zone 'Asia/Kolkata')::int  as order_hour,
+  trim(to_char(o.confirmed_at at time zone 'Asia/Kolkata', 'Day'))      as order_weekday,
+  extract(isodow from o.confirmed_at at time zone 'Asia/Kolkata')::int  as order_weekday_num
+from coffee_shop_orders o;
+
+create or replace view bi.order_items as
+select
+  i.id                                                                  as item_id,
+  i.order_id,
+  'C' || substr(md5(o.user_email), 1, 8)                                as customer_id,
+  i.product_id,
+  i.product_name,
+  p.category,
+  i.quantity,
+  i.unit_price,
+  i.line_total,
+  o.status,
+  o.confirmed_at,
+  (o.confirmed_at at time zone 'Asia/Kolkata')::date                    as order_date,
+  date_trunc('month', o.confirmed_at at time zone 'Asia/Kolkata')::date as order_month,
+  date_trunc('week',  o.confirmed_at at time zone 'Asia/Kolkata')::date as order_week,
+  extract(hour   from o.confirmed_at at time zone 'Asia/Kolkata')::int  as order_hour,
+  trim(to_char(o.confirmed_at at time zone 'Asia/Kolkata', 'Day'))      as order_weekday,
+  extract(isodow from o.confirmed_at at time zone 'Asia/Kolkata')::int  as order_weekday_num
+from coffee_shop_order_items i
+join coffee_shop_orders o        on o.id = i.order_id
+left join coffee_shop_products p on p.id = i.product_id;
+
+create or replace view bi.products as
+select
+  p.id          as product_id,
+  p.name        as product_name,
+  p.category,
+  p.description,
+  p.price,
+  p.rating,
+  p.ingredients
+from coffee_shop_products p;
+
+create or replace view bi.customers as
+select
+  'C' || substr(md5(pr.user_email), 1, 8)        as customer_id,
+  pr.location,
+  pr.likes,
+  pr.dislikes,
+  pr.allergies,
+  pr.created_at                                  as joined_at,
+  coalesce(s.orders_count, 0)                    as orders_count,
+  coalesce(s.total_spent, 0)::numeric(12,2)      as total_spent,
+  s.first_order_at,
+  s.last_order_at
+from coffee_shop_profiles pr
+left join (
+  select user_email,
+         count(*)          as orders_count,
+         sum(total)        as total_spent,
+         min(confirmed_at) as first_order_at,
+         max(confirmed_at) as last_order_at
+  from coffee_shop_orders
+  where status = 'confirmed'
+  group by user_email
+) s on s.user_email = pr.user_email;
+
+revoke all on schema bi from public;
+revoke all on all tables in schema bi from public, anon, authenticated;
+
+do $$
+begin
+  grant usage on schema bi to bi_readonly;
+  grant select on bi.orders, bi.order_items, bi.products, bi.customers to bi_readonly;
+exception when others then
+  raise notice 'Could not grant the BI views to bi_readonly (%).', sqlerrm;
+end;
+$$;
+
+
 -- Runs the Text-to-SQL agent's query. Defence in depth:
---   * callable by the service role only (NOT by logged-in users)
---   * a single SELECT/WITH statement only
---   * system schemas and pg_* functions are rejected
---   * the transaction is switched to READ ONLY, so any write fails even if the
---     checks above are bypassed
+--   * public.execute_sql_query is a thin wrapper, callable by the service role only
+--   * bi.run_query does the work and is OWNED BY bi_readonly (SECURITY DEFINER), so the
+--     query executes with that role's rights: it can only read the four bi views
+--     (no personal data, no other tables). It refuses to run under any other owner.
+--   * one SELECT/WITH statement, no comments, no system or base-table references
+--   * the transaction is READ ONLY, so any write fails even if a check is bypassed
+--   * at most 201 rows come back (the agent shows 200 and reports truncation)
 -- Errors are returned as [{"error": "..."}] so the agent can self-correct.
-create or replace function execute_sql_query(sql_query text)
+-- (Postgres does not allow SET ROLE inside SECURITY DEFINER functions, hence the owner approach.)
+create or replace function bi.run_query(sql_query text)
 returns jsonb
 language plpgsql
 security definer
-set search_path = public
+set search_path = bi, pg_catalog
 as $$
 declare
   result jsonb;
 begin
+  if current_user <> 'bi_readonly' then
+    raise exception 'bi.run_query must be owned by the bi_readonly role (current owner: %).', current_user;
+  end if;
+
   if sql_query is null or sql_query !~* '^\s*(select|with)\s' then
-    raise exception 'Only SELECT queries (read-only) are allowed for the BI agent.';
+    raise exception 'Only SELECT queries (read-only) are allowed.';
   end if;
 
   if position(';' in sql_query) > 0 then
     raise exception 'Multiple statements are not allowed.';
   end if;
 
-  if sql_query ~* '(\mauth\.|\mpg_|\minformation_schema|\mstorage\.|\mvault\.|\mextensions\.)' then
-    raise exception 'Access to system schemas is not allowed.';
+  if position('--' in sql_query) > 0 or position('/*' in sql_query) > 0 then
+    raise exception 'SQL comments are not allowed.';
+  end if;
+
+  if sql_query ~* '(\mauth\.|\mpg_|\minformation_schema|\mstorage\.|\mvault\.|\mextensions\.|\mpublic\.|\mcoffee_shop_)' then
+    raise exception 'Query only the BI views: orders, order_items, products, customers.';
   end if;
 
   perform set_config('transaction_read_only', 'on', true);
 
-  execute format('select coalesce(jsonb_agg(t), ''[]''::jsonb) from (%s) t', sql_query)
-    into result;
+  execute format(
+    'select coalesce(jsonb_agg(t), ''[]''::jsonb) from (select * from (%s) q limit 201) t',
+    sql_query
+  ) into result;
+
   return result;
 exception when others then
   return jsonb_build_array(jsonb_build_object('error', sqlerrm));
 end;
 $$;
 
-revoke all on function execute_sql_query(text) from public, anon, authenticated;
-grant execute on function execute_sql_query(text) to service_role;
+-- Hand ownership to bi_readonly so the function executes with that role's rights.
+-- (The postgres role is a member of bi_readonly, which Postgres requires for this.)
+do $$
+begin
+  grant create on schema bi to bi_readonly;
+  alter function bi.run_query(text) owner to bi_readonly;
+  revoke create on schema bi from bi_readonly;
+exception when others then
+  raise notice 'Could not make bi_readonly the owner of bi.run_query (%). The BI agent will refuse to run until it is.', sqlerrm;
+end;
+$$;
+
+revoke all on function bi.run_query(text) from public, anon, authenticated;
+grant usage on schema bi to service_role;
+grant execute on function bi.run_query(text) to service_role;
+
+-- The function the backend calls (unchanged name and signature).
+create or replace function public.execute_sql_query(sql_query text)
+returns jsonb
+language sql
+as $$
+  select bi.run_query(sql_query);
+$$;
+
+revoke all on function public.execute_sql_query(text) from public, anon, authenticated;
+grant execute on function public.execute_sql_query(text) to service_role;
 
 
 -- ── Storage buckets ───────────────────────────────────────────────────────────
@@ -537,3 +683,13 @@ notify pgrst, 'reload schema';
 --    where proname in ('execute_sql_query','replace_pending_order','confirm_pending_order',
 --                      'append_chat_messages','match_schema_metadata');
 --   -- proacl must list service_role only (no =X/ public entry, no anon, no authenticated)
+--
+-- BI layer checks (run after seeding and re-running this file):
+--   select execute_sql_query('select count(*) as n from orders');          -- expect [{"n": ...}]
+--   select execute_sql_query('select customer_id, orders_count from customers limit 3');  -- anonymised ids only
+--   select execute_sql_query('select * from coffee_shop_profiles');       -- expect an error (blocked)
+--   select execute_sql_query('delete from orders');                       -- expect an error
+--   select rolname from pg_roles where rolname = 'bi_readonly';           -- 1 row
+--   select p.proname, pg_get_userbyid(p.proowner) as owner
+--     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+--    where n.nspname = 'bi';                       -- run_query's owner MUST be bi_readonly

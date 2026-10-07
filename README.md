@@ -73,11 +73,13 @@
 
 ### Admin BI
 
-- **Text-to-SQL** over live order, product and profile data with schema discovery through pgvector.
-- **Self-healing queries**: SQL errors are fed back to the model for up to two retries.
-- **Time-aware analytics**: dates are interpreted in IST, and time-series reports include empty periods.
-- **Privacy**: PII is masked in query results before the model sees them.
-- **Chart inference**: the agent returns `bar`, `pie`, `line`, `table` or `none`, and the React dashboard renders it directly.
+- **Broad coverage**: sales and revenue (day, week, month, year, trends, comparisons, growth), products and categories, customers (top spenders, repeat and new customers, locations, allergy and preference patterns), busiest hours and weekdays, abandoned carts, and products bought together.
+- **Knows its limits**: a structured planning step decides whether to answer with SQL, ask one clarifying question, or politely decline off-topic and write requests. Assumptions (such as "this year = 1 Jan to today") are stated in the answer.
+- **Retrieval-augmented Text-to-SQL**: the model sees the BI views, business definitions, the live menu and the most similar verified question-and-SQL examples (pgvector).
+- **Self-healing queries**: validation and database errors are fed back to the model for up to two retries.
+- **Private by construction**: queries run as a restricted read-only database role over four anonymised views, so personal data and write access are out of reach.
+- **Trustworthy numbers**: charts are built in code straight from the result rows, and an LLM-written summary is accepted only if every number in it exists in the data; otherwise a code-built summary is used.
+- **Time-aware**: dates are pre-computed in IST, time-series reports include empty periods, and the latest incomplete period is flagged as in progress.
 
 ---
 
@@ -189,15 +191,16 @@ The checkpointer is chosen at startup: `AsyncPostgresSaver` (psycopg pool on Sup
 
 ### Admin BI Pipeline
 
-A separate four-node graph in `src/agents/admin/admin_agent/`.
+A separate graph in `src/agents/admin/admin_agent/`. The LLM plans the query and words the answer; code validates, executes, charts and checks.
 
 ```mermaid
 flowchart LR
-    Q([Owner question]) --> DISC["Discovery<br/>embed query, search schema metadata in pgvector"]
-    DISC --> GEN["Generation<br/>schema + question + history to PostgreSQL"]
-    GEN --> EXE["Execution<br/>SELECT-only RPC, mask PII"]
-    EXE -->|SQL error, up to 2 retries| GEN
-    EXE -->|rows| FMT["Formatting<br/>narrative, chart type, chart data"]
+    Q([Owner question]) --> DISC["Discovery<br/>live data profile + similar verified examples"]
+    DISC --> PLAN["Planner - one structured LLM call<br/>query, clarify, out of scope, or write request"]
+    PLAN -->|query| EXE["Execution<br/>validate SQL, run read-only as bi_readonly"]
+    PLAN -->|clarify or decline| FMT["Formatting - code<br/>chart type, chart data, checked narrative"]
+    EXE -->|error, up to 2 retries| PLAN
+    EXE -->|rows| FMT
     FMT --> UI([Chart or table in React])
 ```
 
@@ -208,9 +211,16 @@ The final state returned to the dashboard is:
   "narrative": "...",
   "chart_type": "bar | pie | line | table | none",
   "chart_data": [{ "name": "Cappuccino", "value": 760 }],
-  "sql": "SELECT ..."
+  "sql": "SELECT ...",
+  "intent": "query | clarify | out_of_scope | write_request",
+  "assumptions": ["This year = 1 Jan to today (IST)"],
+  "row_count": 3,
+  "truncated": false,
+  "timings_ms": { "discover_ms": 450, "generate_ms": 3200, "execute_ms": 80, "format_ms": 1900 }
 }
 ```
+
+Safety layers around the generated SQL: a Python validator (single `SELECT` or `WITH`, no comments or write keywords, no system schemas), a service-role-only database function, a read-only transaction, and a restricted `bi_readonly` role that can only read four views (`orders`, `order_items`, `products`, `customers`) in which customers are anonymised and no names or emails exist. At most 200 rows are analysed, and the answer says when results were truncated.
 
 ### Memory Architecture
 
@@ -393,7 +403,8 @@ App: `http://localhost:5173`. Add this origin to `ALLOWED_ORIGINS` in the backen
 ```bash
 cd backend
 uv run python scripts/seed_products.py          # catalog (58 items) + embeddings
-uv run python scripts/index_metadata.py         # schema metadata embeddings for the BI agent
+uv run python scripts/index_metadata.py         # embeds the verified BI question/SQL examples
+uv run python scripts/validate_bi_examples.py   # optional: runs every example against your database
 uv run python scripts/migrate_images.py         # optional: product images to Supabase Storage
 ```
 
@@ -484,7 +495,7 @@ This project is under active development. Current gaps and planned work:
 
 **Safety and robustness**
 - Allergen matching is currently based on ingredient text. Curated per-product allergen tags with synonym handling, plus an allergen check at order time, are planned.
-- BI queries run through a service-role-only database function that accepts a single `SELECT` or `WITH` statement inside a read-only transaction and blocks system schemas. Masked views for personal data and a statement timeout are planned.
+- BI queries run as a restricted read-only role over four anonymised views, inside a read-only transaction. A statement timeout and an automated evaluation suite are planned.
 - Mem0 retrieval is used on the non-streaming `/chat` path; wiring it into `/chat/stream` is pending.
 
 **Quality and operations**

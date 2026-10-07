@@ -1,75 +1,72 @@
-import os
-import sys
+"""Index the BI agent's verified question -> SQL examples into pgvector.
+
+The BI agent retrieves the most similar examples for each question and shows them to the
+model as guidance (retrieval-augmented Text-to-SQL). Re-run this whenever
+data/bi_examples.json changes:
+
+    cd backend
+    uv run python scripts/index_metadata.py
+
+It clears coffee_shop_schema_metadata and re-inserts every example, so it is safe to repeat.
+"""
 import json
 import logging
+import os
+import sys
+
 import psycopg2
 from dotenv import load_dotenv
+from psycopg2.extras import Json
 
 # Allow running as `python scripts/index_metadata.py` from the backend folder
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, BACKEND_DIR)
 
-from src.utils.util import get_embedding_model
+from src.utils.util import get_embedding_model  # noqa: E402
 
-# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 load_dotenv()
 
-# Config
 DB_URL = os.getenv("SUPABASE_DB_URL")
+EXAMPLES_PATH = os.path.join(BACKEND_DIR, "data", "bi_examples.json")
 
-if "?" in DB_URL:
-    full_uri = f"{DB_URL}&sslmode=require"
-else:
-    full_uri = f"{DB_URL}?sslmode=require"
 
-def index_metadata():
-    # 1. Load Metadata
-    metadata_path = "data/schema_metadata.json"
-    if not os.path.exists(metadata_path):
-        logger.error(f"Metadata file not found: {metadata_path}")
-        return
+def main() -> None:
+    if not DB_URL:
+        raise SystemExit("SUPABASE_DB_URL is not set in .env")
 
-    with open(metadata_path, "r") as f:
-        data = json.load(f)
+    with open(EXAMPLES_PATH, encoding="utf-8") as f:
+        examples = json.load(f)
 
-    # 2. Initialize Embeddings from Pool
-    logger.info("Initializing embeddings from centralized pool...")
-    embeddings = get_embedding_model()
+    logger.info(f"Embedding {len(examples)} BI examples...")
+    embeddings = get_embedding_model().embed_documents([e["question"] for e in examples])
 
-    # 3. Connect to DB
+    rows = []
+    for example, embedding in zip(examples, embeddings):
+        metadata = {
+            "type": "example",
+            "question": example["question"],
+            "sql": example["sql"],
+            "tags": example.get("tags", []),
+        }
+        vector_literal = "[" + ",".join(str(x) for x in embedding) + "]"
+        rows.append((example["question"], Json(metadata), vector_literal))
+
+    conn = psycopg2.connect(DB_URL)
     try:
-        conn = psycopg2.connect(full_uri)
-        cur = conn.cursor()
-        
-        # Clear existing metadata to avoid duplicates
-        logger.info("Clearing existing schema metadata...")
-        cur.execute("DELETE FROM coffee_shop_schema_metadata;")
-
-        logger.info(f"Indexing {len(data)} items...")
-        
-        for item in data:
-            # Create a rich content string for embedding
-            if item["type"] == "table":
-                content = f"Table: {item['name']}. Description: {item['description']}"
-            else:
-                content = f"Column: {item['name']} in table {item['table']}. Description: {item['description']}"
-            
-            embedding = embeddings.embed_query(content)
-            
-            cur.execute(
-                "INSERT INTO coffee_shop_schema_metadata (content, metadata, embedding) VALUES (%s, %s, %s)",
-                (content, json.dumps(item), embedding)
+        with conn, conn.cursor() as cur:
+            cur.execute("DELETE FROM coffee_shop_schema_metadata")
+            cur.executemany(
+                "INSERT INTO coffee_shop_schema_metadata (content, metadata, embedding) "
+                "VALUES (%s, %s, %s::vector)",
+                rows,
             )
-        
-        conn.commit()
-        cur.close()
+        logger.info(f"✅ Indexed {len(rows)} examples into coffee_shop_schema_metadata.")
+    finally:
         conn.close()
-        logger.info("✅ Schema metadata indexing complete.")
 
-    except Exception as e:
-        logger.error(f"❌ Indexing failed: {e}")
 
 if __name__ == "__main__":
-    index_metadata()
+    main()
