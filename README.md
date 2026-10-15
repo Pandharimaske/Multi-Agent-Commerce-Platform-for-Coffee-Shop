@@ -34,6 +34,7 @@
   - [Admin BI Pipeline](#admin-bi-pipeline)
   - [Memory Architecture](#memory-architecture)
   - [Data Model](#data-model)
+- [Evaluation](#evaluation)
 - [Key Design Decisions](#key-design-decisions)
 - [Tech Stack](#tech-stack)
 - [API Overview](#api-overview)
@@ -75,7 +76,8 @@
 
 - **Broad coverage**: sales and revenue (day, week, month, year, trends, comparisons, growth), products and categories, customers (top spenders, repeat and new customers, locations, allergy and preference patterns), busiest hours and weekdays, abandoned carts, and products bought together.
 - **Knows its limits**: a structured planning step decides whether to answer with SQL, ask one clarifying question, or politely decline off-topic and write requests. Assumptions (such as "this year = 1 Jan to today") are stated in the answer.
-- **Retrieval-augmented Text-to-SQL**: the model sees the BI views, business definitions, the live menu and the most similar verified question-and-SQL examples (pgvector).
+- **Schema-linked Text-to-SQL**: every view is described in plain language and embedded (pgvector). For each question only the most relevant views are retrieved and put in the prompt, so the context stays small as the number of tables grows. The model also sees business definitions and the live menu. No example questions or queries are ever shown to it.
+- **Measured**: a separate evaluation harness scores the agent on a synthetic database (see [Evaluation](#evaluation)).
 - **Self-healing queries**: validation and database errors are fed back to the model for up to two retries.
 - **Private by construction**: queries run as a restricted read-only database role over four anonymised views, so personal data and write access are out of reach.
 - **Trustworthy numbers**: charts are built in code straight from the result rows, and an LLM-written summary is accepted only if every number in it exists in the data; otherwise a code-built summary is used.
@@ -107,7 +109,7 @@ flowchart LR
         SB[("Supabase: Postgres, Auth, pgvector, Storage")]
         M0[("Mem0 Cloud")]
         LLM["NVIDIA NIM - gpt-oss-20b"]
-        EMB["Hugging Face - bge-base-en-v1.5"]
+        EMB["NVIDIA NIM - nemotron-3-embed-1b"]
     end
 
     CUI -->|SSE and REST| CH
@@ -195,7 +197,7 @@ A separate graph in `src/agents/admin/admin_agent/`. The LLM plans the query and
 
 ```mermaid
 flowchart LR
-    Q([Owner question]) --> DISC["Discovery<br/>live data profile + similar verified examples"]
+    Q([Owner question]) --> DISC["Discovery<br/>live data profile + schema linking (relevant views via pgvector)"]
     DISC --> PLAN["Planner - one structured LLM call<br/>query, clarify, out of scope, or write request"]
     PLAN -->|query| EXE["Execution<br/>validate SQL, run read-only as bi_readonly"]
     PLAN -->|clarify or decline| FMT["Formatting - code<br/>chart type, chart data, checked narrative"]
@@ -219,6 +221,8 @@ The final state returned to the dashboard is:
   "timings_ms": { "discover_ms": 450, "generate_ms": 3200, "execute_ms": 80, "format_ms": 1900 }
 }
 ```
+
+**Schema linking** (the approach Uber described for QueryGPT): each view has a short description of its purpose and columns in [`backend/data/bi_schema_docs.json`](./backend/data/bi_schema_docs.json). `scripts/index_metadata.py` embeds those descriptions into `coffee_shop_schema_metadata`. At question time the question is embedded, the top-k views are retrieved (`BI_SCHEMA_TOP_K`, default 3, `0` = every view) and only those are described in the planner prompt. If retrieval fails or returns nothing, all views are used, and a retry after an error also falls back to all views in case retrieval missed one.
 
 Safety layers around the generated SQL: a Python validator (single `SELECT` or `WITH`, no comments or write keywords, no system schemas), a service-role-only database function, a read-only transaction, and a restricted `bi_readonly` role that can only read four views (`orders`, `order_items`, `products`, `customers`) in which customers are anonymised and no names or emails exist. At most 200 rows are analysed, and the answer says when results were truncated.
 
@@ -299,6 +303,29 @@ An order is a header row in `coffee_shop_orders` (`status` is `pending` for the 
 
 ---
 
+## Evaluation
+
+The admin BI agent is evaluated with a reproducible harness in [`backend/evaluation/`](./backend/evaluation/README.md): a separate Supabase project with deterministic synthetic data (40 customers, 320 confirmed orders), a golden set of 51 data questions (easy, medium, hard, follow-up and explicit-chart), 12 behaviour prompts and 18 adversarial prompts, and reference queries cross-checked against answers computed in plain Python. Execution accuracy compares the agent's result with the reference by values, not SQL text.
+
+Two full runs (`gpt-oss-20b`, schema retrieval top-3 views, 3 repeats = 153 data-question runs, 36 behaviour, 54 adversarial prompts each). Between them, four general SQL prompt rules were added after reading the first run's failures (filter `status = 'confirmed'` on `order_items`, cast to `numeric` before `ROUND`, return only the entity column for list questions, include the grouping column for "per X" questions). The second run is therefore not a held-out test of those rules.
+
+| Metric | Run 1: schema linking | Run 2: + SQL rules |
+|--------|-----------------------|--------------------|
+| Execution accuracy, strict | **86.9%** | **92.8%** |
+| Execution accuracy, lenient (extra or fewer columns allowed) | 96.1% | 100.0% |
+| Correct on the first attempt | 85.6% | 91.5% |
+| SQL ran without error on the first attempt | 98.0% | 98.7% |
+| Behaviour: right intent | 94.4% | 100% |
+| Adversarial attack success (leaks or data changes) | **0 of 54** | **0 of 54** |
+| Narrative numbers all present in the data | 100% | 100% |
+| Latency per data question, p50 / p95 | 9.9 s / 194.7 s | 11.1 s / 186.6 s |
+
+Strict accuracy by tier (run 1 to run 2): easy 97.6% to 100%, medium 88.9% to 93.3%, hard 66.7% to 80.6%, chart 83.3% to 100%, follow-up 100% to 94.4%.
+
+How to read this: the data is synthetic and both runs used one free-tier model. In run 2 every answer is correct under the lenient comparison; the remaining strict misses are about output shape (m07 and f02 now return one column where the reference has two, h08 adds a column) plus h07, where the agent rounds an average to 53.19 and the reference gives 53.2. The first rule change fixed the extra-column problem for some questions and introduced the opposite one for others (follow-up fell from 100% to 94.4%), so there is a trade-off that more rules alone won't settle. The p95 latency comes from free-tier model latency (planning averages 26 s; SQL execution takes about 25 ms). Schema retrieval recall was 100% in both runs, but with only four views that is a weak test; the approach pays off as the number of tables grows. Full reports are in `backend/evaluation/results/`.
+
+---
+
 ## Key Design Decisions
 
 | Decision | Why |
@@ -310,6 +337,7 @@ An order is a header row in `coffee_shop_orders` (`status` is `pending` for the 
 | **Structured outputs for control flow** | Router, input guard and the BI formatter use typed Pydantic schemas rather than free-text parsing. |
 | **Separate customer and admin graphs** | Different users, risk profiles and state shapes, with admin access gated by `is_admin` in the profile table. |
 | **Self-healing Text-to-SQL** | The execution error is injected into the next generation prompt, up to two retries. |
+| **Schema linking, not few-shot examples** | Retrieving similar solved questions can mislead on new questions and goes stale when the schema changes. Embedding table descriptions and retrieving the relevant tables keeps the prompt small and updates by editing one description file. |
 | **Parallel pre-load** | On `/chat`, session, profile, order, history and semantic-memory lookups run concurrently with `asyncio.gather` before the graph starts. |
 | **Atomic persistence** | Chat messages are appended with a database-side RPC, avoiding read-modify-write races. Carts are replaced and confirmed in single database transactions, priced from the live menu. |
 | **Resilient menu endpoint** | `/products` is cached for 10 minutes and falls back to the bundled catalog if Supabase is unreachable. |
@@ -322,7 +350,7 @@ An order is a header row in `coffee_shop_orders` (`status` is `pending` for the 
 |-------|-----------|
 | **LLM** | NVIDIA NIM (OpenAI-compatible API) via `langchain-openai`, default model `openai/gpt-oss-20b`, configurable by environment variable |
 | **Agent framework** | LangGraph (`StateGraph`, `Command`, `interrupt`, Postgres checkpointing), LangChain |
-| **Embeddings** | `BAAI/bge-base-en-v1.5` (768 dimensions) via Hugging Face |
+| **Embeddings** | `nvidia/nemotron-3-embed-1b` (2048 dimensions) via NVIDIA NIM |
 | **Vector search** | Supabase pgvector (menu items and BI schema metadata) |
 | **Semantic memory** | Mem0 Cloud |
 | **Recommender** | scikit-learn, pandas: popularity + Apriori rules + content similarity |
@@ -356,7 +384,7 @@ The SSE stream emits `status` (current agent node), `token`, `interrupt` (approv
 
 ### Prerequisites
 
-Python 3.11+, [`uv`](https://docs.astral.sh/uv/), Node.js 22+, and accounts or keys for Supabase, NVIDIA NIM, Hugging Face and Mem0.
+Python 3.11+, [`uv`](https://docs.astral.sh/uv/), Node.js 22+, and accounts or keys for Supabase, NVIDIA NIM and Mem0.
 
 ### 1. Clone
 
@@ -403,8 +431,8 @@ App: `http://localhost:5173`. Add this origin to `ALLOWED_ORIGINS` in the backen
 ```bash
 cd backend
 uv run python scripts/seed_products.py          # catalog (58 items) + embeddings
-uv run python scripts/index_metadata.py         # embeds the verified BI question/SQL examples
-uv run python scripts/validate_bi_examples.py   # optional: runs every example against your database
+uv run python scripts/index_metadata.py         # embeds the BI view descriptions (schema linking)
+uv run python scripts/validate_schema_docs.py   # optional: checks the descriptions match the real views
 uv run python scripts/migrate_images.py         # optional: product images to Supabase Storage
 ```
 
@@ -422,7 +450,7 @@ Set these in `backend/.env` (never commit it).
 | `NIM_BASE_URL` | Defaults to `https://integrate.api.nvidia.com/v1` |
 | `LLM_MODEL`, `SMALL_LLM_MODEL` | Model IDs, for example `openai/gpt-oss-20b` (NIM IDs include the organisation prefix) |
 | `LLM_TIMEOUT_SECONDS` | Request timeout, default 60 |
-| `HF_API_KEY`, `EMBEDDING_MODEL` | Embeddings (`BAAI/bge-base-en-v1.5`) |
+| `EMBEDDING_NIM_MODEL`, `EMBEDDING_DIM` | Embedding model on NVIDIA NIM (default `nvidia/nemotron-3-embed-1b`, 2048 dimensions; must match `vector(2048)` in `schema.sql`) |
 | `MEM0_API_KEY` | Semantic memory |
 | `SUPABASE_URL` | Supabase project URL |
 | `SUPABASE_KEY` | Anon key (auth) |
@@ -473,8 +501,9 @@ Set `SUPABASE_DB_URL` in production so checkout and approval state survive resta
 │   │   ├── recommender/           # hybrid recommender
 │   │   ├── tools/                 # rag_tool, product_info_tool, about_us_tool
 │   │   └── utils/                 # LLM and embedding pools, email, logging
-│   ├── scripts/                   # DB seeding, BI setup, recommender training
-│   ├── data/                      # product catalog, Apriori rules, popularity data, BI schema metadata
+│   ├── scripts/                   # DB seeding, BI view indexing and validation, recommender training
+│   ├── evaluation/                # BI evaluation harness, golden set, synthetic data, results
+│   ├── data/                      # product catalog, Apriori rules, popularity data, BI view descriptions
 │   ├── supabase_db/                # schema.sql (complete schema) + reset_schema.sql (wipe)
 │   ├── Dockerfile, docker-compose.yml
 │   └── pyproject.toml, uv.lock
@@ -491,11 +520,11 @@ Set `SUPABASE_DB_URL` in production so checkout and approval state survive resta
 
 This project is under active development. Current gaps and planned work:
 
-**Evaluation (in progress).** There is no published benchmark yet. The plan is to measure Text-to-SQL execution accuracy (first attempt vs after retry), RAG retrieval Hit@k and MRR with answer correctness and abstention, recommender ranking quality against a time-split holdout, and end-to-end latency and cost per turn.
+**Evaluation.** The admin BI agent has a benchmark (see [Evaluation](#evaluation)). Still to do: RAG retrieval Hit@k and MRR with answer correctness and abstention, recommender ranking quality against a time-split holdout, and cost per turn. The BI numbers use synthetic data and a single model. Next for BI: a fresh held-out question set (the current golden set has now informed prompt rules) and a column-shape-tolerant comparison to separate presentation from wrong answers.
 
 **Safety and robustness**
 - Allergen matching is currently based on ingredient text. Curated per-product allergen tags with synonym handling, plus an allergen check at order time, are planned.
-- BI queries run as a restricted read-only role over four anonymised views, inside a read-only transaction. A statement timeout and an automated evaluation suite are planned.
+- BI queries run as a restricted read-only role over four anonymised views, inside a read-only transaction. A database statement timeout is still planned; the evaluation suite now covers adversarial prompts (0 of 54 succeeded).
 - Mem0 retrieval is used on the non-streaming `/chat` path; wiring it into `/chat/stream` is pending.
 
 **Quality and operations**

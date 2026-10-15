@@ -79,7 +79,7 @@ create table if not exists coffee_shop_products (
   rating       float,
   ingredients  jsonb        not null default '[]',
   image_url    text,
-  embedding    vector(768),
+  embedding    vector(2048),
   created_at   timestamptz  not null default now()
 );
 
@@ -96,7 +96,7 @@ create policy "Public can read products"
 
 -- Semantic menu search used by the RAG tools (src/rag/retriever.py).
 create or replace function match_coffee_products(
-  query_embedding  vector(768),
+  query_embedding  vector(2048),
   match_threshold  float,
   match_count      int
 )
@@ -414,13 +414,13 @@ create table if not exists coffee_shop_schema_metadata (
   id         uuid         primary key default gen_random_uuid(),
   content    text         not null,
   metadata   jsonb        not null,
-  embedding  vector(768)
+  embedding  vector(2048)
 );
 
 alter table coffee_shop_schema_metadata enable row level security;
 
 create or replace function match_schema_metadata(
-  query_embedding  vector(768),
+  query_embedding  vector(2048),
   match_threshold  float,
   match_count      int
 )

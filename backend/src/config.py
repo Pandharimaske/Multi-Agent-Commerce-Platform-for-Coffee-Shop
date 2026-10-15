@@ -48,8 +48,10 @@ class Settings(BaseSettings):
     llm_timeout_seconds: int = 60
 
     # ── Embeddings ────────────────────────────────────────────────────────────
-    embedding_model: str = "BAAI/bge-base-en-v1.5"  # must match pgvector index dimension (768)
-    hf_api_key: str = ""
+    # NVIDIA NIM only (same NIM_API_KEY and base URL as the LLM).
+    embedding_nim_model: str = "nvidia/nemotron-3-embed-1b"
+    embedding_dim: int = 2048                       # native size; must match vector(2048) in supabase_db/schema.sql
+    embedding_allow_truncate: bool = False          # only for Matryoshka models; see src/utils/embeddings.py
 
     # ── Pinecone (REMOVED: Supabase pgvector is the vector store) ─────────────
     # Fields retained as Optional so old .env files with PINECONE_* don't crash.
@@ -97,7 +99,6 @@ class Settings(BaseSettings):
         """Raise if critical keys are missing."""
         missing = [
             name for name, val in {
-                "HF_API_KEY": self.hf_api_key,
                 "SUPABASE_URL": self.supabase_url,
                 "SUPABASE_KEY": self.supabase_key,
             }.items() if not val
@@ -137,8 +138,9 @@ class Config:
     OPENROUTER_API_KEY = ""                 # removed from Settings
     OPENROUTER_BASE_URL = ""                # removed from Settings
 
-    EMBEDDING_MODEL = settings.embedding_model
-    HF_API_KEY = settings.hf_api_key
+    EMBEDDING_NIM_MODEL = settings.embedding_nim_model
+    EMBEDDING_DIM = settings.embedding_dim
+    EMBEDDING_ALLOW_TRUNCATE = settings.embedding_allow_truncate
 
     # Pinecone removed; pgvector is the active vector store
     PINECONE_API_KEY = settings.pinecone_api_key   # None

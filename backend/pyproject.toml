@@ -15,7 +15,6 @@ dependencies = [
     "langchain>=1.2.9",
     "langchain-community>=0.4.1",
 
-    "langchain-huggingface>=1.2.0",
     "langchain-openai>=1.1.7",
 
     "langgraph>=1.0.8",

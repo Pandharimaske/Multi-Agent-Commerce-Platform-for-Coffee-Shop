@@ -18,7 +18,6 @@ import time
 
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
-from langchain_huggingface import HuggingFaceEndpointEmbeddings
 
 from src.config import Config
 
@@ -214,27 +213,33 @@ class EmbeddingPool:
         self._initialized = True
         logger.info("EmbeddingPool initialized")
 
-    def get_model(self, model_name: str = None) -> HuggingFaceEndpointEmbeddings:
-        """Get or create embedding model (cached)."""
-        model_name = model_name or Config.EMBEDDING_MODEL
+    def get_model(self, model_name: str = None):
+        """Get or create the embedding model (cached). NVIDIA NIM only."""
+        model_name = model_name or Config.EMBEDDING_NIM_MODEL
+        cache_key = f"nim:{model_name}"
 
-        if model_name in EmbeddingPool._models:
-            logger.debug(f"Reusing cached embedding model: {model_name}")
-            return EmbeddingPool._models[model_name]
+        if cache_key in EmbeddingPool._models:
+            logger.debug(f"Reusing cached embedding model: {cache_key}")
+            return EmbeddingPool._models[cache_key]
 
         with self._lock:
-            if model_name not in EmbeddingPool._models:
+            if cache_key not in EmbeddingPool._models:
                 try:
-                    logger.info(f"Creating embedding model: {model_name}")
-                    EmbeddingPool._models[model_name] = HuggingFaceEndpointEmbeddings(
+                    logger.info(f"Creating embedding model: {cache_key}")
+                    from src.utils.embeddings import NimEmbeddings
+                    # No `dimensions` is sent: the model's native size is used and checked against the DB column.
+                    EmbeddingPool._models[cache_key] = NimEmbeddings(
                         model=model_name,
-                        huggingfacehub_api_token=Config.HF_API_KEY
+                        api_key=Config.NIM_API_KEY,
+                        base_url=Config.NIM_BASE_URL,
+                        expected_dim=Config.EMBEDDING_DIM,
+                        allow_truncate=Config.EMBEDDING_ALLOW_TRUNCATE,
                     )
                 except Exception as e:
-                    logger.error(f"Failed to create embedding model {model_name}: {str(e)}")
+                    logger.error(f"Failed to create embedding model {cache_key}: {str(e)}")
                     raise
 
-        return EmbeddingPool._models[model_name]
+        return EmbeddingPool._models[cache_key]
 
     @classmethod
     def clear_cache(cls):
@@ -246,14 +251,14 @@ class EmbeddingPool:
 _embedding_pool = EmbeddingPool()
 
 
-def get_embedding_model(model_name: str = None) -> HuggingFaceEndpointEmbeddings:
+def get_embedding_model(model_name: str = None):
     """Get embedding model from pool."""
     return _embedding_pool.get_model(model_name=model_name)
 
 
 # embedding_model is intentionally NOT initialised here.
 # Call get_embedding_model() at the point of use — lazy init on first request.
-# This prevents HuggingFace API latency / outages from blocking server startup.
+# This prevents embedding-API latency / outages from blocking server startup.
 
 
 # ── Pinecone removed ──────────────────────────────────────────────────────────

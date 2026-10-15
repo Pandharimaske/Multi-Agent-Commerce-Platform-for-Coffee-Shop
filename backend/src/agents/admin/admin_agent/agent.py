@@ -48,6 +48,9 @@ class AdminState(BaseModel):
     row_count: int = 0
     truncated: bool = False
     timings_ms: Dict[str, int] = Field(default_factory=dict)
+    attempts: int = 1                  # planner attempts used (1 = no retries)
+    narrative_source: str = "none"     # llm | deterministic | message | error
+    tables: List[str] = Field(default_factory=list)   # views shown to the planner on the first attempt
 
 
 class BIPlan(BaseModel):
@@ -64,7 +67,7 @@ class AdminGraphState(BaseModel):
     query: str
     history: List[Dict] = Field(default_factory=list)
     profile: Optional[Dict[str, Any]] = None
-    examples: List[Dict[str, Any]] = Field(default_factory=list)
+    tables: List[str] = Field(default_factory=list)   # views retrieved for the question (schema linking)
     prev_question: Optional[str] = None
     prev_sql: Optional[str] = None
     intent: str = "query"
@@ -76,7 +79,7 @@ class AdminGraphState(BaseModel):
     error: Optional[str] = None
     failed_sql: Optional[str] = None
     retry_count: int = 0
-    max_retries: int = 2
+    max_retries: int = Field(default_factory=lambda: int(os.getenv("BI_MAX_RETRIES", "2")))
     timings: Dict[str, int] = Field(default_factory=dict)
     final_output: Optional[Dict[str, Any]] = None
 
@@ -188,51 +191,63 @@ async def get_data_profile() -> Optional[Dict[str, Any]]:
     return profile
 
 
-async def retrieve_examples(query: str, prev_question: Optional[str], k: int = 3) -> List[Dict[str, Any]]:
-    """Similar verified question->SQL examples (pgvector). Fails open: no examples is fine."""
+async def retrieve_tables(query: str, prev_question: Optional[str]) -> List[str]:
+    """Schema linking: the views the question probably needs (their descriptions are embedded in pgvector).
+
+    Fails open: if retrieval is switched off (BI_SCHEMA_TOP_K=0), fails, or finds nothing, every view is returned.
+    """
+    all_names = [d["name"] for d in C.load_table_docs()]
+    k = int(os.getenv("BI_SCHEMA_TOP_K") or "3")
+    if k <= 0 or k >= len(all_names):
+        return all_names
+
     text = query if (len(query.split()) >= 6 or not prev_question) else f"{prev_question} {query}"
     try:
         vector = await asyncio.to_thread(get_embedding_model().embed_query, text)
         res = await asyncio.to_thread(
             lambda: supabase.rpc(
                 "match_schema_metadata",
-                {"query_embedding": vector, "match_threshold": 0.3, "match_count": k},
+                # threshold -1 = no cut-off: we want the k best views however weak the match
+                {"query_embedding": vector, "match_threshold": -1.0, "match_count": k * 3},
             ).execute()
         )
     except Exception as e:
-        logger.warning(f"BI example retrieval failed (continuing without examples): {e}")
-        return []
+        logger.warning(f"BI schema retrieval failed (using every view): {e}")
+        return all_names
 
-    examples = []
+    chosen: List[str] = []
     for row in res.data or []:
         meta = row.get("metadata") or {}
-        if meta.get("type") == "example" and meta.get("sql"):
-            examples.append({"question": meta.get("question", ""), "sql": meta["sql"]})
-    return examples[:k]
+        name = meta.get("table")
+        if meta.get("type") == "table" and name in all_names and name not in chosen:
+            chosen.append(name)
+        if len(chosen) == k:
+            break
+    return chosen or all_names
 
 
 # ── Narrative ─────────────────────────────────────────────────────────────────
 
 async def write_narrative(question: str, analysis: Dict[str, Any], rows: List[Dict[str, Any]],
-                          facts: Dict[str, Any], assumptions: List[str], truncated: bool) -> str:
+                          facts: Dict[str, Any], assumptions: List[str], truncated: bool) -> Tuple[str, str]:
     """LLM wording, accepted only if every number in it exists in the data; otherwise a code-built summary."""
     fallback = U.deterministic_narrative(question, analysis, rows, facts, truncated)
     mode = os.getenv("BI_NARRATIVE_MODE", "llm").lower()
     if mode != "llm" or analysis.get("shape") in ("empty", "metric", "table"):
-        return fallback
+        return fallback, "deterministic"
     try:
         system, human = C.build_narrative_messages(question, analysis, rows, facts, assumptions, truncated)
         response = await llm.ainvoke([SystemMessage(content=system), HumanMessage(content=human)])
         text = _text_of(response.content).strip().strip('"').replace("**", "")
     except Exception as e:
         logger.warning(f"BI narrative LLM failed, using deterministic summary: {e}")
-        return fallback
+        return fallback, "deterministic"
 
     extra = f"{question} {' '.join(assumptions)} {facts.get('today', '')}"
     if len(text) <= 700 and U.narrative_is_faithful(text, rows[:20], facts, extra):
-        return text
+        return text, "llm"
     logger.info("BI narrative rejected (unsupported numbers or format); using deterministic summary")
-    return fallback
+    return fallback, "deterministic"
 
 
 # ── Graph nodes ───────────────────────────────────────────────────────────────
@@ -240,13 +255,13 @@ async def write_narrative(question: str, analysis: Dict[str, Any], rows: List[Di
 async def discovery_node(state: AdminGraphState) -> Dict[str, Any]:
     t0 = time.perf_counter()
     prev_q, prev_sql = _previous_turn(state.history)
-    profile, examples = await asyncio.gather(
-        get_data_profile(), retrieve_examples(state.query, prev_q)
+    profile, tables = await asyncio.gather(
+        get_data_profile(), retrieve_tables(state.query, prev_q)
     )
-    logger.info(f"Node: Discovery | examples={len(examples)} profile={'yes' if profile else 'no'}")
+    logger.info(f"Node: Discovery | views={tables} profile={'yes' if profile else 'no'}")
     return {
         "profile": profile,
-        "examples": examples,
+        "tables": tables,
         "prev_question": prev_q,
         "prev_sql": prev_sql,
         "timings": _timed(state.timings, "discover_ms", t0),
@@ -256,10 +271,12 @@ async def discovery_node(state: AdminGraphState) -> Dict[str, Any]:
 async def generation_node(state: AdminGraphState) -> Dict[str, Any]:
     t0 = time.perf_counter()
     logger.info(f"Node: Generation | retry_count={state.retry_count}")
+    # First attempt: only the retrieved views. After a failure: every view, in case retrieval missed one.
+    docs = C.select_docs(C.load_table_docs(), None if state.error else state.tables)
     prompt = C.build_planner_prompt(
         now_ist=_now_ist_text(),
         profile=state.profile,
-        examples=state.examples,
+        tables=docs,
         prev_question=state.prev_question,
         prev_sql=state.prev_sql,
         error=state.error,
@@ -326,6 +343,7 @@ async def formatting_node(state: AdminGraphState) -> Dict[str, Any]:
     q = state.query
     row_count = 0
     truncated = False
+    narrative_source = "message"
 
     if state.intent != "query":
         narrative = (state.message or "").strip() or C.DEFAULT_MESSAGES.get(state.intent, "I can't help with that.")
@@ -333,6 +351,7 @@ async def formatting_node(state: AdminGraphState) -> Dict[str, Any]:
 
     elif state.error or state.results is None:
         detail = (state.error or "unknown error")[:160]
+        narrative_source = "error"
         narrative = (
             "I couldn't build a working query for that question. "
             "Try rephrasing it or narrowing the time period. "
@@ -346,7 +365,7 @@ async def formatting_node(state: AdminGraphState) -> Dict[str, Any]:
         analysis = U.analyze_result(q, rows)
         facts = U.compute_facts(analysis, rows, q)
         facts["truncated"] = truncated
-        narrative = await write_narrative(q, analysis, rows, facts, state.assumptions, truncated)
+        narrative, narrative_source = await write_narrative(q, analysis, rows, facts, state.assumptions, truncated)
         out = AdminState(
             query=q,
             narrative=_with_assumptions(narrative, state.assumptions),
@@ -361,9 +380,13 @@ async def formatting_node(state: AdminGraphState) -> Dict[str, Any]:
 
     timings = _timed(state.timings, "format_ms", t0)
     out.timings_ms = timings
+    failed = state.intent == "query" and (state.error is not None or state.results is None)
+    out.attempts = state.retry_count + (0 if failed else 1)
+    out.narrative_source = narrative_source
+    out.tables = list(state.tables)
     logger.info("bi_turn " + json.dumps({
         "query": q, "intent": out.intent, "chart": out.chart_type, "rows": out.row_count,
-        "retries": state.retry_count, "error": bool(state.error), "timings_ms": timings,
+        "attempts": out.attempts, "narrative": out.narrative_source, "error": bool(state.error), "timings_ms": timings,
     }))
     return {"final_output": out.model_dump()}
 

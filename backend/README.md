@@ -64,7 +64,7 @@ backend/
 │   │
 │   ├── rag/
 │   │   ├── retriever.py        # pgvector query_products, retrieve_price_by_name
-│   │   └── vector_db_setup.py  # (deprecated) one-time Pinecone indexing — pgvector used instead
+│   │   └── vector_db_setup.py  # (removed stub) old Pinecone indexing — pgvector + NIM embeddings used instead
 │   │
 │   ├── recommender/
 │   │   └── hybrid_recommender.py # Fit, score (pop+apriori+content), recommend, persist
@@ -81,12 +81,16 @@ backend/
 │       └── logger.py           # Structured logger setup
 │
 ├── scripts/
-│   ├── index_metadata.py       # Seeds coffee_shop_schema_metadata with pgvector embeddings
+│   ├── index_metadata.py       # Embeds the BI view descriptions into coffee_shop_schema_metadata (schema linking)
+│   ├── validate_schema_docs.py # Checks the documented columns match the real BI views
 │   ├── initialize_bi_agent.py  # Creates schema + RPC functions in Supabase
 │   ├── seed_products.py        # Seeds products from products.jsonl into Supabase
 │   └── migrate_images.py       # Uploads product images to Supabase Storage
 │
+├── evaluation/                 # BI evaluation harness (see evaluation/README.md)
+│
 ├── data/
+│   ├── bi_schema_docs.json     # Plain-language description of each BI view (embedded for schema linking)
 │   ├── products_data/
 │   │   ├── products.jsonl          # 58-item product catalog (source of truth for seeding)
 │   │   └── Merrys_way_about_us.txt # RAG context document for about-us queries
@@ -163,16 +167,18 @@ CoffeeAgentState {
 
 A completely separate LangGraph that handles SQL analytics. Lives at `src/agents/admin/admin_agent/`.
 
-#### Node 1 — Discovery
+#### Node 1 — Discovery (schema linking)
 ```python
-query → embed() → pgvector search on coffee_shop_schema_metadata
-      → returns: global table overview + relevant column details
+query → embed() → pgvector search on coffee_shop_schema_metadata (one row per BI view description)
+      → top-k views (BI_SCHEMA_TOP_K, default 3; 0 = all)  + live data profile
+# fail-open: on error or no match, every view is used
 ```
+Each view's purpose and columns are written once in `data/bi_schema_docs.json` and embedded by `scripts/index_metadata.py`. No example questions or SQL are ever put in the prompt, so nothing goes stale when the schema changes: edit the description file and re-index.
 
 #### Node 2 — Generation
 ```python
-(schema_context + query + history + error?) → NVIDIA NIM LLM → raw SQL
-# error is injected on retries — LLM self-corrects
+(retrieved view descriptions + definitions + query + history + error?) → NVIDIA NIM LLM → plan + SQL
+# error is injected on retries — LLM self-corrects; retries show every view in case retrieval missed one
 ```
 
 #### Node 3 — Execution
@@ -329,7 +335,7 @@ CREATE TABLE coffee_shop_schema_metadata (
   id        BIGSERIAL PRIMARY KEY,
   content   TEXT,
   metadata  JSONB,
-  embedding vector(768)
+  embedding vector(2048)
 );
 
 -- pgvector similarity search function used by Admin Discovery node
@@ -354,8 +360,8 @@ LLM_MODEL=moonshotai/kimi-k3    # Primary (large) model
 SMALL_LLM_MODEL=gpt-oss-20b     # Small model for router + structured output
 
 # ── Embeddings ────────────────────────────────────────────────────────────────
-HF_API_KEY=
-EMBEDDING_MODEL=BAAI/bge-base-en-v1.5
+EMBEDDING_NIM_MODEL=nvidia/nemotron-3-embed-1b   # uses NIM_API_KEY
+EMBEDDING_DIM=2048                               # must match vector(2048) in schema.sql
 
 # ── Semantic Memory ───────────────────────────────────────────────────────────
 MEM0_API_KEY=
@@ -412,8 +418,9 @@ uv run uvicorn api.main:app --reload --reload-dir api --reload-dir src
 # 2. Seed product catalog
 uv run python scripts/seed_products.py
 
-# 3. Index schema metadata for Admin BI Agent
+# 3. Index the BI view descriptions (schema linking) and check them against the real views
 uv run python scripts/index_metadata.py
+uv run python scripts/validate_schema_docs.py
 
 # 4. (Optional) Migrate product images to Supabase Storage
 uv run python scripts/migrate_images.py
@@ -435,5 +442,11 @@ LangGraph gives a stateful directed graph with explicit node transitions and a s
 ### 3. Allergen Safety is a Hard Constraint
 Allergen filtering is done in Python *post-retrieval*, not by LLM reasoning. The LLM is probabilistic — it can be wrong. Python `in` checks are deterministic. The filter runs before candidates reach the LLM.
 
-### 4. SQL Scrubbing for Admin Agent
+### 4. Schema Linking for the Admin Agent
+Instead of retrieving similar solved question/SQL pairs (which can mislead on unfamiliar questions and go stale when the schema changes), each view's description is embedded and only the relevant views are placed in the prompt. Tune with `BI_SCHEMA_TOP_K` (0 = all views).
+
+### 5. Evaluation
+The BI agent is scored on a separate database with synthetic data. Two full runs (`gpt-oss-20b`, 153 data-question runs, 54 adversarial prompts each): 86.9% strict / 96.1% lenient execution accuracy with schema linking, then 92.8% strict / 100% lenient after four general SQL prompt rules added from the first run's failures (so the second run is not held-out). 0 attacks succeeded in either run; p50 latency about 10 s. Details, caveats and how to reproduce: [`evaluation/README.md`](./evaluation/README.md).
+
+### 6. SQL Scrubbing for Admin Agent
 LLMs often wrap SQL in markdown fences (` ```sql `) and add trailing semicolons. Both break Supabase's `execute_sql_query` RPC. A `scrub_sql()` function strips both before execution. If execution still fails, the error is injected into the next generation prompt — up to 2 retries.

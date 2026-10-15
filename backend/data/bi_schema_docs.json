@@ -1,0 +1,74 @@
+[
+  {
+    "name": "orders",
+    "description": "One row per order or cart (header). Use it for order counts, revenue totals, average order value, when orders happen (day, week, month, hour, weekday), and for open or abandoned carts.",
+    "columns": [
+      {"name": "order_id"},
+      {"name": "customer_id", "desc": "anonymised, e.g. 'C1a2b3c4d'"},
+      {"name": "status", "desc": "'confirmed' = paid order, 'pending' = open cart"},
+      {"name": "order_total", "desc": "rupees"},
+      {"name": "created_at", "desc": "timestamptz"},
+      {"name": "confirmed_at", "desc": "timestamptz"},
+      {"name": "updated_at", "desc": "timestamptz"},
+      {"name": "order_date", "desc": "date, IST"},
+      {"name": "order_month", "desc": "date, first day of the month, IST"},
+      {"name": "order_week", "desc": "date, Monday of the week, IST"},
+      {"name": "order_hour", "desc": "0-23, IST"},
+      {"name": "order_weekday", "desc": "'Monday'..."},
+      {"name": "order_weekday_num", "desc": "1=Monday ... 7=Sunday"}
+    ],
+    "notes": "The order_* columns are NULL for pending carts."
+  },
+  {
+    "name": "order_items",
+    "description": "One row per product per order (line items, already joined to the order's status and dates). Use it for product and category sales: units sold, product or category revenue, what is bought together, never-sold or best-selling products.",
+    "columns": [
+      {"name": "item_id"},
+      {"name": "order_id"},
+      {"name": "customer_id"},
+      {"name": "product_id"},
+      {"name": "product_name"},
+      {"name": "category"},
+      {"name": "quantity"},
+      {"name": "unit_price", "desc": "rupees"},
+      {"name": "line_total", "desc": "rupees"},
+      {"name": "status"},
+      {"name": "confirmed_at"},
+      {"name": "order_date"},
+      {"name": "order_month"},
+      {"name": "order_week"},
+      {"name": "order_hour"},
+      {"name": "order_weekday"},
+      {"name": "order_weekday_num"}
+    ]
+  },
+  {
+    "name": "products",
+    "description": "The menu. Use it for prices, ratings, categories, descriptions and ingredients of menu items, and for finding items that were never sold (together with order_items).",
+    "columns": [
+      {"name": "product_id"},
+      {"name": "product_name"},
+      {"name": "category"},
+      {"name": "description"},
+      {"name": "price", "desc": "rupees"},
+      {"name": "rating"},
+      {"name": "ingredients", "desc": "jsonb array of text"}
+    ]
+  },
+  {
+    "name": "customers",
+    "description": "One row per customer (anonymised, no names or emails). Use it for customer counts, top spenders, repeat or new customers, sign-ups, locations, and customers' likes, dislikes and allergies.",
+    "columns": [
+      {"name": "customer_id"},
+      {"name": "location"},
+      {"name": "likes", "desc": "jsonb array of text"},
+      {"name": "dislikes", "desc": "jsonb array of text"},
+      {"name": "allergies", "desc": "jsonb array of text"},
+      {"name": "joined_at"},
+      {"name": "orders_count", "desc": "confirmed orders only"},
+      {"name": "total_spent", "desc": "confirmed orders only"},
+      {"name": "first_order_at"},
+      {"name": "last_order_at"}
+    ]
+  }
+]

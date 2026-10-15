@@ -26,7 +26,7 @@ RetrieverConfig = ConfigRetrieverConfig
 def search_products(
     query: str,
     top_k: int = 5,
-    match_threshold: float = 0.5,
+    match_threshold: float = 0.35,   # nemotron-3-embed-1b: correct menu matches score ~0.42-0.76, unrelated ~0.3-0.38
 ) -> List[Dict[str, Any]]:
     """Search products using Supabase pgvector similarity search."""
     try:
@@ -96,7 +96,8 @@ def get_product_by_name(name: str) -> Dict[str, Any]:
             match_name = top_match.get("name")
             score = top_match.get("score")
             
-            # Use confidence threshold (0.5 for BGE models)
+            # Stricter than browse search on purpose: a wrong name substitution is worse than "not found".
+            # With nemotron-3-embed-1b, 'capuchino' -> Cappuccino scores 0.55, while 'cold coffee' -> a cold brew scores 0.47.
             if score and score > 0.5:
                 logger.info(f"Supabase translated '{name}' -> '{match_name}' (score: {score:.2f})")
                 return {

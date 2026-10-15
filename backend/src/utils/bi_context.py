@@ -1,32 +1,66 @@
-"""Prompt building blocks for the admin BI agent (pure strings, no heavy imports)."""
+"""Prompt building blocks for the admin BI agent (pure strings and one small JSON file, no heavy imports).
+
+Schema linking: every BI view has a natural-language description in data/bi_schema_docs.json. The
+descriptions are embedded (scripts/index_metadata.py); at question time the agent retrieves the views a
+question needs and the prompt lists only those. See src/agents/admin/admin_agent/agent.py.
+"""
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Sequence
 
 from src.utils.bi_utils import MAX_ROWS
 
-SCHEMA_DOC = """\
-## Views you can query (reference them by bare name, no schema prefix)
+DOCS_PATH = Path(__file__).resolve().parents[2] / "data" / "bi_schema_docs.json"
+_DOCS_CACHE: Optional[List[Dict[str, Any]]] = None
 
-orders - one row per order or cart (header)
-  order_id, customer_id (anonymised, e.g. 'C1a2b3c4d'), status ('confirmed' = paid order, 'pending' = open cart),
-  order_total (rupees), created_at, confirmed_at, updated_at (timestamptz),
-  order_date (date, IST), order_month (date, first day of the month, IST), order_week (date, Monday of the week, IST),
-  order_hour (0-23, IST), order_weekday ('Monday'...), order_weekday_num (1=Monday ... 7=Sunday)
-  The order_* columns are NULL for pending carts.
+SCHEMA_HEADING = "## Views you can query (reference them by bare name, no schema prefix)"
 
-order_items - one row per product per order (line items, joined to order info)
-  item_id, order_id, customer_id, product_id, product_name, category, quantity, unit_price, line_total (rupees),
-  status, confirmed_at, order_date, order_month, order_week, order_hour, order_weekday, order_weekday_num
 
-products - the menu
-  product_id, product_name, category, description, price (rupees), rating, ingredients (jsonb array of text)
+# ── Table descriptions (schema linking) ───────────────────────────────────────
 
-customers - one row per customer (anonymised, no names or emails)
-  customer_id, location, likes / dislikes / allergies (jsonb arrays of text), joined_at,
-  orders_count and total_spent (confirmed orders only), first_order_at, last_order_at
-"""
+def load_table_docs(path: Optional[Path] = None) -> List[Dict[str, Any]]:
+    """The description of every BI view: {name, description, columns: [{name, desc?}], notes?}."""
+    global _DOCS_CACHE
+    if path is not None:
+        return json.loads(Path(path).read_text(encoding="utf-8"))
+    if _DOCS_CACHE is None:
+        _DOCS_CACHE = json.loads(DOCS_PATH.read_text(encoding="utf-8"))
+    return _DOCS_CACHE
+
+
+def table_embedding_text(doc: Dict[str, Any]) -> str:
+    """The text that is embedded for one view: what it is for, plus its columns."""
+    columns = ", ".join(c["name"] + (f" ({c['desc']})" if c.get("desc") else "") for c in doc["columns"])
+    parts = [f"{doc['name']}: {doc['description']}", f"Columns: {columns}"]
+    if doc.get("notes"):
+        parts.append(doc["notes"])
+    return "\n".join(parts)
+
+
+def select_docs(docs: Sequence[Dict[str, Any]], names: Optional[Sequence[str]] = None) -> List[Dict[str, Any]]:
+    """The documented views called `names`, in their canonical order. names=None means every view."""
+    if names is None:
+        return list(docs)
+    wanted = set(names)
+    return [d for d in docs if d["name"] in wanted]
+
+
+def render_table_docs(docs: Sequence[Dict[str, Any]]) -> str:
+    blocks = []
+    for d in docs:
+        lines = [f"{d['name']} - {d['description']}"]
+        for c in d["columns"]:
+            lines.append(f"  {c['name']}" + (f": {c['desc']}" if c.get("desc") else ""))
+        if d.get("notes"):
+            lines.append(f"  Note: {d['notes']}")
+        blocks.append("\n".join(lines))
+    return SCHEMA_HEADING + "\n\n" + "\n\n".join(blocks) + "\n"
+
+
+# Every view, rendered (kept for code that wants the complete schema text).
+SCHEMA_DOC = render_table_docs(load_table_docs())
 
 BUSINESS_DEFINITIONS = """\
 ## Business definitions
@@ -42,12 +76,12 @@ BUSINESS_DEFINITIONS = """\
 SQL_RULES = """\
 ## SQL rules
 1. Write ONE read-only query. A query may start with SELECT or WITH. No semicolon, no comments, no markdown.
-2. Use only the views above (orders, order_items, products, customers), never schema prefixes or other tables.
+2. Use only the views listed above (orders, order_items, products, customers), never schema prefixes or other tables.
 3. Today (IST) is (now() AT TIME ZONE 'Asia/Kolkata')::date. This month is date_trunc('month', now() AT TIME ZONE 'Asia/Kolkata')::date, compared with order_month. Use the pre-computed order_date / order_month / order_week / order_hour columns instead of converting time zones yourself.
-4. Revenue questions use status = 'confirmed' unless the question is about carts or pending orders.
+4. Revenue, sales and units questions use status = 'confirmed' unless the question is about carts or pending orders. order_items has its own status column, so filter it there too, not only on orders.
 5. Product or category revenue: SUM(line_total) from order_items. Order-level revenue: SUM(order_total) from orders. Never join orders to order_items and then sum order_total.
-6. Chart-friendly answers: for a ranking, breakdown or trend return EXACTLY two columns, the label first and the number second, with meaningful aliases (product_name, revenue, units_sold, orders ...). For a single number return one column. For comparisons or several metrics return several columns.
-7. Reports or trends over a period (this year, last 7 days, last 8 weeks) must include EVERY period, with 0 where there were no orders (generate_series plus a LEFT JOIN, as in the examples).
+6. Chart-friendly answers: for a ranking, breakdown or trend return EXACTLY two columns, the label first and the number second, with meaningful aliases (product_name, revenue, units_sold, orders ...). For a single number return one column. For comparisons or several metrics return several columns. For a list question ("which products ...", "which customers ...") return only the entity column, not extra supporting columns. For "in each category" or "per X" questions always include the grouping column (category, month, ...).
+7. Reports or trends over a period (this year, last 7 days, last 8 weeks) must include EVERY period, with 0 where there were no orders: generate the list of periods with generate_series and LEFT JOIN the orders onto it. Cast date_trunc(...) results to ::date so period labels are dates.
 8. Top-N: ORDER BY the metric DESC with a LIMIT (10 if the user says "top" without a number). Always use a deterministic ORDER BY.
 9. Percentages: ROUND(x * 100.0 / NULLIF(y, 0), 1). Round money to 2 decimals. Guard every division with NULLIF. ROUND(x, n) only works on numeric values: cast the floating-point columns price and rating with ::numeric before rounding.
 10. Match product names with ILIKE '%name%', using the product list below to resolve plurals, typos and partial names.
@@ -64,15 +98,6 @@ INTENT_GUIDE = """\
 - "write_request": asks to change, delete, add or update data or settings. Explain in "message" that you are read-only.
 Always list the assumptions you made (periods, status filters, definitions) in "assumptions" as short phrases, for example "This year = 1 Jan to today (IST)".
 """
-
-
-def format_examples(examples: List[Dict[str, Any]]) -> str:
-    if not examples:
-        return "(none retrieved)"
-    blocks = []
-    for ex in examples:
-        blocks.append(f"Q: {ex.get('question', '').strip()}\nSQL: {ex.get('sql', '').strip()}")
-    return "\n\n".join(blocks)
 
 
 def format_profile(profile: Optional[Dict[str, Any]]) -> str:
@@ -95,12 +120,15 @@ def format_profile(profile: Optional[Dict[str, Any]]) -> str:
 def build_planner_prompt(
     now_ist: str,
     profile: Optional[Dict[str, Any]],
-    examples: List[Dict[str, Any]],
+    tables: Optional[Sequence[Dict[str, Any]]] = None,
     prev_question: Optional[str] = None,
     prev_sql: Optional[str] = None,
     error: Optional[str] = None,
     failed_sql: Optional[str] = None,
 ) -> str:
+    """`tables` are the view descriptions to show (see select_docs); None shows every view."""
+    schema = render_table_docs(tables if tables else load_table_docs())
+
     context = ""
     if prev_question:
         context = f"\n## Previous turn (for follow-up questions)\nPrevious question: {prev_question}\n"
@@ -119,10 +147,9 @@ def build_planner_prompt(
         "You are the BI analyst for Merry's Way, a coffee shop in India. "
         "Turn the owner's question into ONE read-only PostgreSQL query over the views below, or decline politely.\n"
         f"Current time: {now_ist}\n\n"
-        f"{SCHEMA_DOC}\n{BUSINESS_DEFINITIONS}\n"
+        f"{schema}\n{BUSINESS_DEFINITIONS}\n"
         f"## Data currently available\n{format_profile(profile)}\n\n"
         f"{SQL_RULES}\n"
-        f"## Similar verified examples\n{format_examples(examples)}\n"
         f"{context}{retry}\n"
         f"{INTENT_GUIDE}"
     )

@@ -22,8 +22,10 @@ services:
         value: openai/gpt-oss-20b
       - key: LLM_TIMEOUT_SECONDS
         value: "60"
-      - key: HF_API_KEY
-        sync: false
+      - key: EMBEDDING_NIM_MODEL
+        value: nvidia/nemotron-3-embed-1b
+      - key: EMBEDDING_DIM
+        value: "2048"
       - key: PINECONE_API_KEY
         sync: false
       - key: PINECONE_INDEX_NAME

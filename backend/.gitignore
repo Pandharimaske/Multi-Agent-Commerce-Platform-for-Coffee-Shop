@@ -1,4 +1,8 @@
 # Project-specific ignores
+# Evaluation: keys for the separate eval project, generated data, and run outputs
+.env.eval
+/evaluation/data
+/evaluation/results
 /data/products_data/images
 /experiments
 /scratch

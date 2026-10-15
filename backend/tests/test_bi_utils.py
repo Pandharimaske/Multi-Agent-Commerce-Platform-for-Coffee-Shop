@@ -280,7 +280,7 @@ def test_empty_narrative_is_rejected():
 
 # ── Verified examples bank ────────────────────────────────────────────────────
 
-EXAMPLES_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "bi_examples.json")
+SCHEMA_DOCS_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "bi_schema_docs.json")
 
 KNOWN_COLUMNS = {
     # view names that contain an underscore
@@ -301,42 +301,43 @@ SQL_FUNCTIONS = {
 }
 
 
-def _examples():
-    with open(EXAMPLES_PATH, encoding="utf-8") as f:
+def _docs():
+    with open(SCHEMA_DOCS_PATH, encoding="utf-8") as f:
         return json.load(f)
 
 
-def test_examples_exist_and_are_unique():
-    ex = _examples()
-    assert len(ex) >= 30
-    questions = [e["question"] for e in ex]
-    assert len(set(questions)) == len(questions)
-    for e in ex:
-        assert e["question"].strip() and e["sql"].strip()
+def test_every_view_is_described():
+    docs = _docs()
+    assert [d["name"] for d in docs] == ["orders", "order_items", "products", "customers"]
+    for d in docs:
+        assert d["description"].strip() and d["columns"], d["name"]
 
 
-def test_every_example_passes_the_sql_validator():
-    for e in _examples():
-        assert U.validate_sql(e["sql"]) is None, (e["question"], U.validate_sql(e["sql"]))
-        assert U.scrub_sql(e["sql"]) == e["sql"].strip(), e["question"]
+def test_documented_columns_are_known_and_unique():
+    """Catches typos like order_totla in the view descriptions."""
+    for d in _docs():
+        names = [c["name"] for c in d["columns"]]
+        assert len(names) == len(set(names)), d["name"]
+        for n in names:
+            assert n in KNOWN_COLUMNS, (d["name"], n)
 
 
-def test_every_example_uses_only_known_columns():
-    """Catches typos like order_totla: every snake_case word must be a known column, function or alias."""
-    for e in _examples():
-        sql = U.mask_literals(e["sql"]).lower()
-        aliases = set(re.findall(r"\bas\s+([a-z_][a-z0-9_]*)", sql))
-        for word in re.findall(r"[a-z_][a-z0-9_]*", sql):
-            if "_" not in word:
-                continue
-            assert word in KNOWN_COLUMNS or word in SQL_FUNCTIONS or word in aliases, (e["question"], word)
+def test_embedding_text_mentions_purpose_and_columns():
+    from src.utils import bi_context as C
+    for d in C.load_table_docs():
+        text = C.table_embedding_text(d)
+        assert d["name"] in text and d["description"] in text and d["columns"][0]["name"] in text
 
 
-def test_examples_never_reference_base_tables_or_schemas():
-    for e in _examples():
-        sql = U.mask_literals(e["sql"]).lower()
-        for forbidden in ("coffee_shop_", "bi.", "public.", "auth."):
-            assert forbidden not in sql, (e["question"], forbidden)
+def test_prompt_lists_only_the_selected_views():
+    from src.utils import bi_context as C
+    docs = C.load_table_docs()
+    one = C.build_planner_prompt("2026-10-14 10:00:00 IST", None, tables=C.select_docs(docs, ["customers"]))
+    assert "customers - " in one and "order_items - " not in one and "products - " not in one
+    full = C.build_planner_prompt("2026-10-14 10:00:00 IST", None)
+    for name in ("orders", "order_items", "products", "customers"):
+        assert f"{name} - " in full
+    assert "Similar verified examples" not in full
 
 
 # ── Explicitly requested chart types ──────────────────────────────────────────

@@ -16,7 +16,7 @@ import os
 from dotenv import load_dotenv
 load_dotenv()
 
-from langchain_huggingface import HuggingFaceEndpointEmbeddings
+from src.utils.util import get_embedding_model  # noqa: E402  (NVIDIA NIM embeddings)
 
 # Seed script needs service role key to bypass RLS
 supabase = create_client(
@@ -29,11 +29,6 @@ DATA_PATH = os.path.join(
     "../data/products_data/products.jsonl"
 )
 
-# Initialize embeddings
-embeddings_model = HuggingFaceEndpointEmbeddings(
-    model="BAAI/bge-base-en-v1.5",
-    huggingfacehub_api_token=os.getenv("HF_API_KEY")
-)
 
 
 def seed():
@@ -67,9 +62,9 @@ def seed():
         print("No products found in JSONL file.")
         return
 
-    print(f"Generating embeddings for {len(names)} products via HF API...")
+    print(f"Generating embeddings for {len(names)} products via NVIDIA NIM...")
     # Generate embeddings in batch
-    embeddings = embeddings_model.embed_documents(names)
+    embeddings = get_embedding_model().embed_documents(names)
     
     for i, product in enumerate(products):
         product["embedding"] = embeddings[i]
