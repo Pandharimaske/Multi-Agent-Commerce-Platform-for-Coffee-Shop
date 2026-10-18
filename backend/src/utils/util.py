@@ -12,7 +12,7 @@ import os
 import logging
 import threading
 from typing import Optional
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from functools import wraps
 import time
 
@@ -185,6 +185,36 @@ def get_small_model(temperature: float = 0.0, model_name: str = None) -> ChatOpe
 
 llm = get_model()  # Default large instance
 small_llm = get_small_model() # Default small instance
+
+
+# ============================================================
+# Shop clock (IST)
+# ============================================================
+# The server runs in UTC (Render), but the shop is in Pune, so anything the
+# assistant says about the date or time of day must use IST.
+
+IST = timezone(timedelta(hours=5, minutes=30))
+
+
+def time_of_day(hour: int) -> str:
+    """Name of the part of the day for an hour (0-23)."""
+    if hour < 12:
+        return "morning"
+    if hour < 17:
+        return "afternoon"
+    if hour < 21:
+        return "evening"
+    return "night"
+
+
+def time_of_day_ist() -> str:
+    return time_of_day(datetime.now(IST).hour)
+
+
+def now_ist_text() -> str:
+    """Current shop time for prompts, e.g. 'Sunday, 18 October 2026, 03:05 PM IST (afternoon)'."""
+    now = datetime.now(IST)
+    return f"{now.strftime('%A, %d %B %Y, %I:%M %p')} IST ({time_of_day(now.hour)})"
 
 
 # ============================================================

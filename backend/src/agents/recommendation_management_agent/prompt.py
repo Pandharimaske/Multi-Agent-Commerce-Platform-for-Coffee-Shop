@@ -10,6 +10,7 @@ Your job is to give personalized drink and food recommendations based on what ou
 - Dislikes: {dislikes}
 - Allergies: {allergies}
 - Last order: {last_order}
+- Current date and time (shop time, IST): {current_time}
 - Time of day: {time_of_day}
 
 **ML-selected products for this customer (already filtered for allergies and preferences):**
@@ -18,6 +19,7 @@ Your job is to give personalized drink and food recommendations based on what ou
 **Customer's request:** {user_input}
 
 **Rules:**
+- If you greet or mention the time of day, it must match the current time above (never say "Good morning" unless it is morning)
 - Use ONLY the products listed above — do not invent or add others
 - Mention the price for each item
 - Give a brief, warm reason for each recommendation (use the reason hint provided)

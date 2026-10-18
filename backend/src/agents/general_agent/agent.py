@@ -5,7 +5,7 @@ from langchain_core.messages import AIMessage
 from langgraph.types import Command
 from langgraph.graph import END
 
-from src.utils.util import llm
+from src.utils.util import llm, now_ist_text
 from src.agents.general_agent.prompt import general_prompt
 from src.graph.state import CoffeeAgentState
 
@@ -36,6 +36,7 @@ async def general_agent(state: CoffeeAgentState) -> Command:
             "user_memory": state.user_memory.model_dump(),
             "current_order": current_order,
             "order_total": order_total,
+            "current_time": now_ist_text(),
         })
         msg = response.content
         return Command(

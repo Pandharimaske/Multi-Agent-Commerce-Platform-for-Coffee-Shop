@@ -5,7 +5,7 @@ from langchain_core.messages import AIMessage
 from langgraph.types import Command
 from langgraph.graph import END
 
-from src.utils.util import llm
+from src.utils.util import llm, now_ist_text, time_of_day_ist
 from src.graph.state import CoffeeAgentState
 from src.recommender import HybridRecommender
 from src.agents.recommendation_management_agent.prompt import recommendation_prompt
@@ -30,11 +30,7 @@ def _get_recommender() -> HybridRecommender:
 
 
 def _time_context() -> str:
-    hour = datetime.now().hour
-    if hour < 11:   return "morning"
-    if hour < 15:   return "afternoon"
-    if hour < 18:   return "evening"
-    return "evening"
+    return time_of_day_ist()
 
 
 def _format_ml_products(recommendations: list[dict]) -> str:
@@ -80,6 +76,7 @@ async def recommendation_management_agent(state: CoffeeAgentState) -> Command:
             "allergies": memory.allergies or "none",
             "last_order": memory.last_order or "no previous order",
             "time_of_day": _time_context(),
+            "current_time": now_ist_text(),
             "products": _format_ml_products(recommendations),
         })
 
