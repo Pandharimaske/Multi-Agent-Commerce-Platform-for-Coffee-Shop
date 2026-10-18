@@ -53,8 +53,7 @@ backend/
 │   ├── memory/
 │   │   ├── supabase_client.py  # Supabase anon + admin client singletons
 │   │   ├── schemas.py          # UserMemory pydantic model
-│   │   ├── memory_manager.py   # CRUD for coffee_shop_profiles table
-│   │   └── mem0_manager.py     # Mem0 Cloud (MemoryClient v2) — semantic memory
+│   │   └── memory_manager.py   # CRUD for coffee_shop_profiles table
 │   │
 │   ├── orders/
 │   │   └── order_manager.py    # get_active_order, create/update order in Supabase
@@ -116,7 +115,6 @@ CoffeeAgentState {
   user_input       : str           — the current message
   messages         : list[Message] — full conversation history
   user_memory      : UserMemory    — structured preferences (likes, allergies, etc.)
-  semantic_memories: str           — Mem0 search results injected as context
   order            : list[Item]    — active cart
   final_price      : float
   response_message : str           — filled by the terminal specialist agent
@@ -131,7 +129,6 @@ CoffeeAgentState {
 #### Node 2 — Memory Agent
 - **Job**: Extract preferences from *every* message and persist them
 - Writes to `coffee_shop_profiles` in Supabase (structured: likes, dislikes, allergies)
-- Also writes to Mem0 Cloud for semantic long-term memory
 - Runs even if there's no explicit preference — it extracts implicit signals
 
 #### Node 3 — Router Agent
@@ -246,15 +243,14 @@ scrub_sql(sql)                  # strip markdown fences + trailing semicolons
 
 ### Parallel Pre-load (Zero Sequential Latency)
 
-Before the LangGraph is invoked on every `/chat` request, 5 async operations run **simultaneously**:
+Before the LangGraph is invoked on every `/chat` request, 4 async operations run **simultaneously**:
 
 ```python
-_, user_memory, (order, final_price), messages, semantic_memories = await asyncio.gather(
+_, user_memory, (order, final_price), messages = await asyncio.gather(
     asyncio.to_thread(get_or_create_session, session_id, user_email),
     asyncio.to_thread(get_user_memory, user_email),
     asyncio.to_thread(get_active_order, user_email),
     asyncio.to_thread(load_messages, session_id),
-    asyncio.to_thread(mem0_manager.search_memories, user_input, user_email)
 )
 ```
 
@@ -362,9 +358,6 @@ SMALL_LLM_MODEL=gpt-oss-20b     # Small model for router + structured output
 # ── Embeddings ────────────────────────────────────────────────────────────────
 EMBEDDING_NIM_MODEL=nvidia/nemotron-3-embed-1b   # uses NIM_API_KEY
 EMBEDDING_DIM=2048                               # must match vector(2048) in schema.sql
-
-# ── Semantic Memory ───────────────────────────────────────────────────────────
-MEM0_API_KEY=
 
 # ── Supabase ──────────────────────────────────────────────────────────────────
 SUPABASE_URL=
