@@ -198,6 +198,8 @@ IST = timezone(timedelta(hours=5, minutes=30))
 
 def time_of_day(hour: int) -> str:
     """Name of the part of the day for an hour (0-23)."""
+    if hour < 5:
+        return "night"
     if hour < 12:
         return "morning"
     if hour < 17:
