@@ -8,7 +8,6 @@
   <img src="https://img.shields.io/badge/React-Frontend-61DAFB?style=for-the-badge&logo=react&logoColor=black" />
   <img src="https://img.shields.io/badge/Supabase-Postgres%20%2B%20pgvector%20%2B%20Auth-3ECF8E?style=for-the-badge&logo=supabase&logoColor=white" />
   <img src="https://img.shields.io/badge/NVIDIA%20NIM-LLM-76B900?style=for-the-badge&logo=nvidia&logoColor=white" />
-  <img src="https://img.shields.io/badge/Mem0-Semantic%20Memory-111111?style=for-the-badge" />
   <img src="https://img.shields.io/badge/Docker-Render%20%2B%20Vercel-2496ED?style=for-the-badge&logo=docker&logoColor=white" />
 </p>
 
@@ -107,7 +106,6 @@ flowchart LR
 
     subgraph Services["Data and AI services"]
         SB[("Supabase: Postgres, Auth, pgvector, Storage")]
-        M0[("Mem0 Cloud")]
         LLM["NVIDIA NIM - gpt-oss-20b"]
         EMB["NVIDIA NIM - nemotron-3-embed-1b"]
     end
@@ -118,7 +116,6 @@ flowchart LR
     CH --> CG
     AD --> AG
     CG --> SB
-    CG --> M0
     CG --> LLM
     CG --> EMB
     AG --> SB
@@ -129,7 +126,7 @@ flowchart LR
 
 ### Customer Agent Pipeline
 
-Every customer message runs through one directed LangGraph `StateGraph` that shares a single `CoffeeAgentState` (messages, user memory, semantic memories, active order, total, response).
+Every customer message runs through one directed LangGraph `StateGraph` that shares a single `CoffeeAgentState` (messages, user memory, active order, total, response).
 
 ```mermaid
 flowchart TD
@@ -152,7 +149,7 @@ flowchart TD
 | Node | Responsibility |
 |------|----------------|
 | **Input Processor** | Guard and intent refiner. Rewrites the message using the last 6 messages, blocks invalid requests, handles an attached image. |
-| **Memory Agent** | Extracts likes, dislikes, allergies and other preferences, asks the user to approve, then writes to Supabase profiles and Mem0. |
+| **Memory Agent** | Extracts likes, dislikes, allergies and other preferences, asks the user to approve, then writes to the Supabase profile. |
 | **Router** | `small_llm.with_structured_output(AgentDecision)` returns a typed target: `details`, `order`, `recommendation` or `general`. |
 | **Details Agent** | Agentic loop (max 5 iterations) over `rag_tool` (pgvector semantic search), `product_info_tool` (exact name lookup with semantic fallback) and `about_us_tool`. |
 | **Order Agent** | Classifies the action (create, update, remove, confirm, cancel), validates items and prices against Supabase, persists a pending order, and returns a deterministic cart summary. |
@@ -233,7 +230,6 @@ Safety layers around the generated SQL: a Python validator (single `SELECT` or `
 | **Short-term** | Sliding window of recent messages in graph state | Conversational coherence and reference resolution | Per request |
 | **Session history** | `coffee_shop_sessions` (JSONB, atomic RPC append) | Restore chat after refresh | Per session |
 | **Structured profile** | `coffee_shop_profiles` | Likes, dislikes, allergies, last order, location | Permanent |
-| **Semantic memory** | Mem0 Cloud | Free-form facts and context retrieved by similarity | Permanent |
 | **Graph checkpoints** | Postgres checkpointer | Resume paused graphs (checkout, memory approval) | Per thread |
 
 ### Data Model
@@ -338,7 +334,7 @@ How to read this: the data is synthetic and both runs used one free-tier model. 
 | **Separate customer and admin graphs** | Different users, risk profiles and state shapes, with admin access gated by `is_admin` in the profile table. |
 | **Self-healing Text-to-SQL** | The execution error is injected into the next generation prompt, up to two retries. |
 | **Schema linking, not few-shot examples** | Retrieving similar solved questions can mislead on new questions and goes stale when the schema changes. Embedding table descriptions and retrieving the relevant tables keeps the prompt small and updates by editing one description file. |
-| **Parallel pre-load** | On `/chat`, session, profile, order, history and semantic-memory lookups run concurrently with `asyncio.gather` before the graph starts. |
+| **Parallel pre-load** | On `/chat`, session, profile, order and history lookups run concurrently with `asyncio.gather` before the graph starts. |
 | **Atomic persistence** | Chat messages are appended with a database-side RPC, avoiding read-modify-write races. Carts are replaced and confirmed in single database transactions, priced from the live menu. |
 | **Resilient menu endpoint** | `/products` is cached for 10 minutes and falls back to the bundled catalog if Supabase is unreachable. |
 
@@ -352,7 +348,6 @@ How to read this: the data is synthetic and both runs used one free-tier model. 
 | **Agent framework** | LangGraph (`StateGraph`, `Command`, `interrupt`, Postgres checkpointing), LangChain |
 | **Embeddings** | `nvidia/nemotron-3-embed-1b` (2048 dimensions) via NVIDIA NIM |
 | **Vector search** | Supabase pgvector (menu items and BI schema metadata) |
-| **Semantic memory** | Mem0 Cloud |
 | **Recommender** | scikit-learn, pandas: popularity + Apriori rules + content similarity |
 | **Database and auth** | Supabase (PostgreSQL, Auth, Storage, RLS) |
 | **Backend** | FastAPI, Uvicorn/Gunicorn, Python 3.11+, `uv` |
@@ -384,7 +379,7 @@ The SSE stream emits `status` (current agent node), `token`, `interrupt` (approv
 
 ### Prerequisites
 
-Python 3.11+, [`uv`](https://docs.astral.sh/uv/), Node.js 22+, and accounts or keys for Supabase, NVIDIA NIM and Mem0.
+Python 3.11+, [`uv`](https://docs.astral.sh/uv/), Node.js 22+, and accounts or keys for Supabase and NVIDIA NIM.
 
 ### 1. Clone
 
@@ -451,7 +446,6 @@ Set these in `backend/.env` (never commit it).
 | `LLM_MODEL`, `SMALL_LLM_MODEL` | Model IDs, for example `openai/gpt-oss-20b` (NIM IDs include the organisation prefix) |
 | `LLM_TIMEOUT_SECONDS` | Request timeout, default 60 |
 | `EMBEDDING_NIM_MODEL`, `EMBEDDING_DIM` | Embedding model on NVIDIA NIM (default `nvidia/nemotron-3-embed-1b`, 2048 dimensions; must match `vector(2048)` in `schema.sql`) |
-| `MEM0_API_KEY` | Semantic memory |
 | `SUPABASE_URL` | Supabase project URL |
 | `SUPABASE_KEY` | Anon key (auth) |
 | `SUPABASE_SERVICE_KEY` | Service-role key (server-side DB access) |
@@ -494,7 +488,7 @@ Set `SUPABASE_DB_URL` in production so checkout and approval state survive resta
 │   │   ├── agents/                # input_processor, memory_management, router, details_management,
 │   │   │                          # order_management, recommendation_management, general, admin/
 │   │   ├── graph/                 # StateGraph builder, shared state, checkpointer selection
-│   │   ├── memory/                # Supabase profile CRUD, Mem0 client
+│   │   ├── memory/                # Supabase profile CRUD and client
 │   │   ├── orders/                # active/confirmed order persistence
 │   │   ├── sessions/              # chat history persistence
 │   │   ├── rag/                   # pgvector retriever (semantic + exact lookup)
@@ -525,7 +519,6 @@ This project is under active development. Current gaps and planned work:
 **Safety and robustness**
 - Allergen matching is currently based on ingredient text. Curated per-product allergen tags with synonym handling, plus an allergen check at order time, are planned.
 - BI queries run as a restricted read-only role over four anonymised views, inside a read-only transaction. A database statement timeout is still planned; the evaluation suite now covers adversarial prompts (0 of 54 succeeded).
-- Mem0 retrieval is used on the non-streaming `/chat` path; wiring it into `/chat/stream` is pending.
 
 **Quality and operations**
 - Single source of truth for shop information used by the details agent.

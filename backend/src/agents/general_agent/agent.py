@@ -36,7 +36,6 @@ async def general_agent(state: CoffeeAgentState) -> Command:
             "user_memory": state.user_memory.model_dump(),
             "current_order": current_order,
             "order_total": order_total,
-            "semantic_memories": state.semantic_memories,
         })
         msg = response.content
         return Command(

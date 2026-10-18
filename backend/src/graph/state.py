@@ -16,7 +16,6 @@ class ProductItem(BaseModel):
 class CoffeeAgentState(BaseModel):
     messages: Annotated[List[BaseMessage], add_messages] = Field(default_factory=list)
     user_memory: UserMemory = Field(default_factory=UserMemory)
-    semantic_memories: str = "" # New context from Mem0
     chat_summary: str = ""
     user_input: str = ""
     image_url: Optional[str] = None

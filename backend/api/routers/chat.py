@@ -87,18 +87,16 @@ async def chat(body: ChatRequest, current_user: CurrentUser):
     session_id = body.session_id or str(uuid.uuid4())
 
     # Parallelize pre-graph loads
-    # Using to_thread because supabase-py and mem0 are synchronous
-    from src.memory.mem0_manager import mem0_manager
+    # Using to_thread because supabase-py is synchronous
     tasks = [
         asyncio.to_thread(get_or_create_session, session_id, user_email),
         asyncio.to_thread(get_user_memory, user_email),
         asyncio.to_thread(get_active_order, user_email),
         asyncio.to_thread(load_messages, session_id),
-        asyncio.to_thread(mem0_manager.search_memories, body.user_input, user_email)
     ]
     
-    # Run all 5 queries simultaneously
-    _, user_memory, (order, final_price), messages, semantic_memories = await asyncio.gather(*tasks)
+    # Run all 4 queries simultaneously
+    _, user_memory, (order, final_price), messages = await asyncio.gather(*tasks)
     
     # Defaults and safety handling
     if not isinstance(user_memory, UserMemory): user_memory = None
@@ -107,7 +105,6 @@ async def chat(body: ChatRequest, current_user: CurrentUser):
     state = CoffeeAgentState(
         user_input=body.user_input,
         user_memory=user_memory or CoffeeAgentState().user_memory,
-        semantic_memories=semantic_memories or "",
         order=order,
         final_price=final_price,
         messages=messages,
